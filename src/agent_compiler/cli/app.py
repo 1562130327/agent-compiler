@@ -162,6 +162,8 @@ def main():
 
     if args.config:
         config = AgentConfig.from_yaml(args.config, **kwargs)
+    elif Path("config.yaml").exists():
+        config = AgentConfig.from_yaml("config.yaml", **kwargs)
     else:
         config = AgentConfig.from_env(**kwargs)
 

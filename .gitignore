@@ -11,6 +11,7 @@ build/
 agent_cache/
 demo_cache/
 demo_test_cache/
+proxy_cache/
 
 # Virtual environments
 venv/

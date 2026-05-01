@@ -48,20 +48,22 @@ class Agent:
     """
 
     def __init__(self, config: AgentConfig | None = None, **kwargs):
-        # Build config: passed config > env vars > kwargs > defaults
+        # Build config: passed config > config.yaml > env vars > kwargs > defaults
         if config is not None:
             self.config = config
-        elif kwargs:
-            self.config = AgentConfig.from_env(**kwargs)
         else:
-            self.config = AgentConfig.from_env()
+            yaml_path = Path("config.yaml")
+            if yaml_path.exists():
+                self.config = AgentConfig.from_yaml(str(yaml_path), **kwargs)
+            else:
+                self.config = AgentConfig.from_env(**kwargs)
 
         cfg = self.config
 
         # Resolve rules path
         rules_path = cfg.rules_path
         if rules_path is None:
-            default = Path(__file__).parent.parent.parent / "rules.yaml"
+            default = Path(__file__).parent.parent.parent.parent / "rules.yaml"
             if default.exists():
                 rules_path = str(default)
 

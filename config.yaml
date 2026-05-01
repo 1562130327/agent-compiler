@@ -5,16 +5,16 @@
 # ── LLM 配置 ──────────────────────────────────────────
 llm:
   # 模式: mock | claude | openai | openai_compat
-  provider: mock
+  provider: openai_compat
 
   # API 密钥（建议用环境变量 LLM_API_KEY，不要写在这里）
-  # api_key: "sk-xxx"
+  api_key: "sk-48374c7cad9340b4ae2c77dedaf43d19"
 
   # 自定义 API 地址（OpenRouter / Ollama / vLLM / 本地模型）
-  # api_base: "https://api.openrouter.ai/v1"
+  api_base: "https://api.deepseek.com"
 
   # 模型名
-  # model: "anthropic/claude-sonnet-4"
+  model: "deepseek-chat"
 
 # ── 缓存配置 ──────────────────────────────────────────
 cache:
@@ -22,7 +22,7 @@ cache:
   dir: "./agent_cache"
 
   # 嵌入相似度阈值（0-1，越低越容易命中缓存）
-  similarity_threshold: 0.50
+  similarity_threshold: 0.30
 
 # ── 规则配置 ──────────────────────────────────────────
 rules:
