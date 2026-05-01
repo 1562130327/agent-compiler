@@ -1,0 +1,121 @@
+"""Centralized configuration — reads from env vars and optional config.yaml."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+@dataclass
+class LLMConfig:
+    """LLM provider configuration."""
+    provider: str = "mock"        # mock | claude | openai | openai_compat
+    api_key: str = ""
+    api_base: str = ""
+    model: str = ""
+
+    @property
+    def is_mock(self) -> bool:
+        return self.provider == "mock"
+
+    @property
+    def summary(self) -> dict:
+        masked = self.api_key[:8] + "..." + self.api_key[-4:] if len(self.api_key) > 12 else "***"
+        return {
+            "provider": self.provider,
+            "model": self.model or "(default)",
+            "api_base": self.api_base or "(default)",
+            "api_key": masked if self.api_key else "(not set)",
+        }
+
+
+@dataclass
+class AgentConfig:
+    """Full agent configuration.
+
+    Priority: constructor kwargs > env vars > defaults
+
+    Environment variables:
+        LLM_PROVIDER, LLM_API_KEY, LLM_API_BASE, LLM_MODEL
+        AGENT_CACHE_DIR, AGENT_SIMILARITY_THRESHOLD, AGENT_RULES_PATH
+    """
+    llm: LLMConfig = field(default_factory=LLMConfig)
+    cache_dir: str = "./agent_cache"
+    similarity_threshold: float = 0.50
+    rules_path: str | None = None
+    embedding_mode: str = "lightweight"   # lightweight | neural
+    ram_max_entries: int = 1000
+    ram_max_memory_mb: float = 200.0
+
+    @classmethod
+    def from_env(cls, **overrides) -> AgentConfig:
+        """Build config from environment variables, with optional overrides."""
+        llm = LLMConfig(
+            provider=overrides.pop("llm_provider", None)
+                     or os.environ.get("LLM_PROVIDER", "mock"),
+            api_key=overrides.pop("llm_api_key", None)
+                    or os.environ.get("LLM_API_KEY", ""),
+            api_base=overrides.pop("llm_api_base", None)
+                     or os.environ.get("LLM_API_BASE", ""),
+            model=overrides.pop("llm_model", None)
+                  or os.environ.get("LLM_MODEL", ""),
+        )
+        # Set default model per provider
+        if not llm.model:
+            llm.model = {
+                "claude": "claude-sonnet-4-6",
+                "openai": "gpt-4o-mini",
+                "openai_compat": "gpt-4o-mini",
+            }.get(llm.provider, "")
+
+        cache_dir = overrides.pop("cache_dir", None) or os.environ.get("AGENT_CACHE_DIR", "./agent_cache")
+        threshold = float(overrides.pop("similarity_threshold", None) or os.environ.get("AGENT_SIMILARITY_THRESHOLD", "0.50"))
+        rules_path = overrides.pop("rules_path", None) or os.environ.get("AGENT_RULES_PATH") or None
+
+        return cls(
+            llm=llm,
+            cache_dir=cache_dir,
+            similarity_threshold=threshold,
+            rules_path=rules_path,
+            **overrides,
+        )
+
+    @classmethod
+    def from_yaml(cls, path: str, **overrides) -> AgentConfig:
+        """Build config from a YAML file, with overrides."""
+        import yaml
+        cfg_data = {}
+        if Path(path).exists():
+            with open(path, encoding="utf-8") as f:
+                cfg_data = yaml.safe_load(f) or {}
+
+        llm_data = cfg_data.get("llm", {})
+        cache_data = cfg_data.get("cache", {})
+        rules_data = cfg_data.get("rules", {})
+
+        llm = LLMConfig(
+            provider=overrides.pop("llm_provider", None)
+                     or llm_data.get("provider", "mock"),
+            api_key=overrides.pop("llm_api_key", None)
+                    or llm_data.get("api_key", ""),
+            api_base=overrides.pop("llm_api_base", None)
+                     or llm_data.get("api_base", ""),
+            model=overrides.pop("llm_model", None)
+                  or llm_data.get("model", ""),
+        )
+        if not llm.model:
+            llm.model = {
+                "claude": "claude-sonnet-4-6",
+                "openai": "gpt-4o-mini",
+                "openai_compat": "gpt-4o-mini",
+            }.get(llm.provider, "")
+
+        return cls(
+            llm=llm,
+            cache_dir=overrides.pop("cache_dir", None) or cache_data.get("dir", "./agent_cache"),
+            similarity_threshold=float(overrides.pop("similarity_threshold", None) or cache_data.get("similarity_threshold", 0.50)),
+            rules_path=overrides.pop("rules_path", None) or rules_data.get("path"),
+            **overrides,
+        )

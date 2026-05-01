@@ -1,0 +1,38 @@
+# 默认规则文件 — Layer 1 规则引擎
+# 高频、确定性强的操作直接通过规则匹配，绕过 LLM
+
+rules:
+  - name: server_status
+    keywords: ["服务器状态", "server status", "系统状态", "运行状态", "服务状态", "查看状态"]
+    patterns:
+      - "查(看|询).*状态"
+      - "(check|get).*(server|system).*status"
+    tool_name: get_system_status
+    params:
+      format: summary
+
+  - name: list_files
+    keywords: ["列出文件", "文件列表", "目录内容", "ls", "list files", "查看文件", "看看文件"]
+    patterns:
+      - "(列出|查看|显示).*(文件|目录)"
+      - "(list|show|ls).*(files|directory)"
+    tool_name: list_directory
+    params:
+      path: "."
+      limit: 50
+
+  - name: disk_usage
+    keywords: ["磁盘空间", "磁盘使用", "硬盘空间", "disk usage", "df", "空间还有多少"]
+    patterns:
+      - "(查看|检查).*磁盘"
+      - "(check|show).*disk"
+    tool_name: get_disk_usage
+    params: {}
+
+  - name: current_time
+    keywords: ["现在几点", "当前时间", "日期", "今天几号", "what time", "current time", "日期时间"]
+    patterns:
+      - "(现在|当前).*(几点|时间|日期)"
+      - "what.*time"
+    tool_name: get_current_time
+    params: {}
