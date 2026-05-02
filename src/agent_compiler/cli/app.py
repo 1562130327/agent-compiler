@@ -158,6 +158,7 @@ def interactive(agent: Agent):
             # Start tracking session for multi-turn
             session_id = f"sess_{result.workflow_id}"
         _print_result(result)
+        sys.stdout.flush()  # 强制刷新，确保 Windows 下立即显示
 
         if agent._metrics["total"] % 5 == 0:
             print(f"\n  [自动报告 — 每 5 次查询触发]")
@@ -166,6 +167,10 @@ def interactive(agent: Agent):
 
 def main():
     """Main CLI entry point."""
+    # 强制行缓冲，解决 Windows 下输出不立即显示的问题
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -174,6 +179,12 @@ def main():
                         help="Interactive chat mode (default)")
     parser.add_argument("--query", "-q", type=str,
                         help="Single query mode")
+    parser.add_argument("--web", "-w", action="store_true",
+                        help="Start web UI (http://localhost:8220)")
+    parser.add_argument("--port", "-p", type=int, default=8220,
+                        help="Web UI port (default: 8220)")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Don't auto-open browser in web mode")
     parser.add_argument("--report", "-r", action="store_true",
                         help="Show cache stats and exit")
     parser.add_argument("--config", "-c", type=str,
@@ -246,6 +257,15 @@ def main():
         print(agent.efficiency_report())
         return
 
+    if args.web:
+        from agent_compiler.web.server import start_server
+        print(f"\n  Agent Compiler Web UI 启动中...")
+        print(f"  浏览器打开后即可使用: http://127.0.0.1:{args.port}")
+        print(f"  按 Ctrl+C 退出\n")
+        start_server(host="127.0.0.1", port=args.port,
+                    open_browser=not args.no_browser)
+        return
+
     if args.query:
         result = agent.process(args.query)
         _print_result(result)
@@ -253,6 +273,17 @@ def main():
         return
 
     interactive(agent)
+
+
+def web_main():
+    """Entry point for 'agent-compiler-web' command — directly opens web UI."""
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+    from agent_compiler.web.server import start_server
+    print("Agent Compiler Web UI")
+    print("浏览器打开后即可使用: http://127.0.0.1:8220")
+    print("按 Ctrl+C 退出\n")
+    start_server()
 
 
 if __name__ == "__main__":

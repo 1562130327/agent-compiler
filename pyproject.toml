@@ -22,6 +22,7 @@ llm = ["anthropic>=0.30", "openai>=1.0"]
 mcp = ["mcp>=1.0"]
 cloud = ["boto3>=1.28"]
 dev = ["pytest>=7.0"]
+web = ["pyinstaller>=6.0"]
 
 [tool.setuptools.package-dir]
 "" = "src"
@@ -32,6 +33,7 @@ where = ["src"]
 [project.scripts]
 agent-compiler = "agent_compiler.cli.app:main"
 agent-compiler-proxy = "agent_compiler.adapters.proxy:main"
+agent-compiler-web = "agent_compiler.cli.app:web_main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
