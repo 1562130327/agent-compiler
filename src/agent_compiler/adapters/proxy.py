@@ -64,7 +64,7 @@ class AgentCompilerProxy:
                 ),
                 cache_dir=cache_dir,
                 similarity_threshold=similarity_threshold,
-                rules_path=rules_path,
+                cache_seeds_path=rules_path,
             )
         )
         self._http = httpx.Client(timeout=httpx.Timeout(120.0))
@@ -175,6 +175,9 @@ class AgentCompilerProxy:
                 parts.append(f"**当前时间**\n- {data.get('date', '')} {data.get('time', '')} "
                            f"({data.get('weekday', '')})")
 
+            elif tool == "chat_reply":
+                parts.append(data.get("message", ""))
+
             elif tool == "find_large_files":
                 files = data.get("files", [])
                 lines = [f"**大文件** ({data.get('path', '')}, top {data.get('top_n', '')})"]
@@ -190,7 +193,7 @@ class AgentCompilerProxy:
     # ── Core proxy logic ────────────────────────────────────────────
 
     def process_request(self, body: dict) -> dict:
-        """Process a chat completion request through the three-layer cache.
+        """Process a chat completion request through agent caching.
 
         Returns an OpenAI-compatible response dict.
         """
@@ -201,28 +204,23 @@ class AgentCompilerProxy:
         if not user_input.strip():
             return self._forward(body, requested_model)
 
-        # Run through agent-compiler's three-layer dispatch
+        # Run through agent-compiler
         result = self.agent.process(user_input)
 
-        if result.source in ("rule", "cache"):
-            # L1 or L2 hit: execute tools and return formatted result
+        if result.source == "cache":
+            # Cache hit: return formatted tool result
             self._cache_hits += 1
             steps = result.data.get("steps", []) if result.success else []
-
-            # If we have direct tool execution (rule match)
-            if "tool" in result.data:
-                steps = [result.data]
-
             message = self.format_tool_result_message(steps)
-
-            # Add header showing cache source
-            source_label = {"rule": "规则引擎(L1)", "cache": "语义缓存(L2)"}.get(result.source, result.source)
-            latency_info = f"({result.latency_ms:.1f}ms, 置信度 {result.confidence})"
-            full_message = f"[agent-compiler → {source_label} {latency_info}]\n\n{message}"
-
+            latency_info = f"({result.latency_ms:.1f}ms)"
+            full_message = f"[agent-compiler -> cache {latency_info}]\n\n{message}"
             return self.format_chat_response(full_message, model="agent-compiler")
 
-        # L3 miss: forward to upstream LLM
+        if result.source == "llm" and result.text:
+            # LLM response with conversational text
+            return self.format_chat_response(result.text, model="agent-compiler")
+
+        # Fallback: forward to upstream LLM
         response = self._forward(body, requested_model)
         return response
 

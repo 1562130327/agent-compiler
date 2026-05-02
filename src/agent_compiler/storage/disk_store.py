@@ -33,7 +33,8 @@ class DiskStore:
                     confidence REAL DEFAULT 1.0,
                     created_at REAL,
                     last_hit_at REAL,
-                    params_schema_json TEXT DEFAULT '{}'
+                    params_schema_json TEXT DEFAULT '{}',
+                    keywords_json TEXT DEFAULT '[]'
                 )
             """)
             conn.execute("""
@@ -42,6 +43,11 @@ class DiskStore:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_last_hit ON workflows(last_hit_at DESC)
             """)
+            # Migrate: add keywords column if upgrading from older schema
+            try:
+                conn.execute("ALTER TABLE workflows ADD COLUMN keywords_json TEXT DEFAULT '[]'")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     def save(self, wf: WorkflowTemplate):
         steps_json = json.dumps([
@@ -50,14 +56,15 @@ class DiskStore:
             for s in wf.steps
         ], ensure_ascii=False)
         params_json = json.dumps(wf.params_schema, ensure_ascii=False)
+        keywords_json = json.dumps(wf.keywords, ensure_ascii=False)
 
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO workflows
-                (id, intent, steps_json, hit_count, confidence, created_at, last_hit_at, params_schema_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, intent, steps_json, hit_count, confidence, created_at, last_hit_at, params_schema_json, keywords_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (wf.id, wf.intent, steps_json, wf.hit_count, wf.confidence,
-                  wf.created_at, wf.last_hit_at, params_json))
+                  wf.created_at, wf.last_hit_at, params_json, keywords_json))
 
     def load(self, workflow_id: str) -> WorkflowTemplate | None:
         with sqlite3.connect(str(self.db_path)) as conn:
@@ -100,4 +107,5 @@ class DiskStore:
             created_at=row[5],
             last_hit_at=row[6],
             params_schema=json.loads(row[7]) if len(row) > 7 else {},
+            keywords=json.loads(row[8]) if len(row) > 8 else [],
         )

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from agent_compiler.core.types import ActionStep
+from agent_compiler.core.types import ActionStep, ToolDefinition
 
 
 class ToolRegistry:
@@ -18,11 +18,18 @@ class ToolRegistry:
         # Register a custom tool
         ToolRegistry.register("my_tool", my_function)
 
+        # Register with LLM metadata
+        ToolRegistry.register_with_def("my_tool", my_function,
+            description="Does something useful",
+            params_schema={"type": "object", "properties": {...}},
+        )
+
         # Execute a step
         result = ToolRegistry.execute(ActionStep(tool_name="my_tool", params={}))
     """
 
     _tools: dict[str, Callable] = {}
+    _defs: dict[str, dict] = {}
     _initialized = False
 
     @classmethod
@@ -31,13 +38,45 @@ class ToolRegistry:
         cls._tools[name] = fn
 
     @classmethod
+    def register_with_def(cls, name: str, fn: Callable[..., dict],
+                          description: str = "", params_schema: dict | None = None):
+        """Register a tool with full LLM metadata."""
+        cls._tools[name] = fn
+        cls._defs[name] = {
+            "name": name,
+            "description": description,
+            "fn": fn,
+            "params_schema": params_schema or {"type": "object", "properties": {}},
+        }
+
+    @classmethod
     def unregister(cls, name: str):
         cls._tools.pop(name, None)
+        cls._defs.pop(name, None)
 
     @classmethod
     def list_tools(cls) -> list[str]:
         cls._ensure_init()
         return list(cls._tools.keys())
+
+    @classmethod
+    def list_tool_definitions(cls) -> list[dict]:
+        """Return tool metadata for LLM tool-use APIs.
+
+        Returns list of {name, description, params_schema} dicts.
+        """
+        cls._ensure_init()
+        return [{
+            "name": name,
+            "description": defn["description"],
+            "params_schema": defn["params_schema"],
+        } for name, defn in cls._defs.items()]
+
+    @classmethod
+    def get_tool_definition(cls, name: str) -> dict | None:
+        """Get a single tool's definition dict."""
+        cls._ensure_init()
+        return cls._defs.get(name)
 
     @classmethod
     def execute(cls, step: ActionStep) -> dict:
@@ -65,6 +104,7 @@ class ToolRegistry:
     @classmethod
     def _ensure_init(cls):
         if not cls._initialized:
-            from agent_compiler.tools.demo_tools import _BUILTIN_TOOLS
+            from agent_compiler.tools.demo_tools import _BUILTIN_TOOLS, _BUILTIN_TOOL_DEFS
             cls._tools.update(_BUILTIN_TOOLS)
+            cls._defs.update(_BUILTIN_TOOL_DEFS)
             cls._initialized = True

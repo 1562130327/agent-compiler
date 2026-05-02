@@ -29,6 +29,7 @@ class LightweightEmbedding(EmbeddingProvider):
         super().__init__(similarity_threshold)
         self._vocab: dict[str, int] = {}
         self._idf: dict[str, float] = {}
+        self._build_vocab(list(self._SEED_TEXTS))
 
     def encode(self, text: str) -> np.ndarray:
         if not self._vocab:

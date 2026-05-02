@@ -100,6 +100,11 @@ def list_directory(path: str = ".", limit: int = 50) -> dict:
     return {"path": path, "total": len(files), "files": files[:limit]}
 
 
+def chat_reply(message: str = "") -> dict:
+    """Return a conversational reply (no-op tool for non-task inputs)."""
+    return {"message": message, "type": "chat"}
+
+
 def get_current_time(**kwargs) -> dict:
     now = datetime.now()
     return {
@@ -112,6 +117,7 @@ def get_current_time(**kwargs) -> dict:
 
 # Built-in tool registry for auto-registration
 _BUILTIN_TOOLS = {
+    "chat_reply": chat_reply,
     "get_system_status": get_system_status,
     "get_disk_usage": get_disk_usage,
     "find_large_files": find_large_files,
@@ -119,4 +125,92 @@ _BUILTIN_TOOLS = {
     "generate_report": generate_report,
     "list_directory": list_directory,
     "get_current_time": get_current_time,
+}
+
+_BUILTIN_TOOL_DEFS = {
+    "chat_reply": {
+        "name": "chat_reply",
+        "description": "Reply to the user with a conversational message. Use this for greetings, self-introduction, thanks, or when the user asks a general question that does not require other tools.",
+        "fn": chat_reply,
+        "params_schema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "The reply message to show the user"},
+            },
+            "required": ["message"],
+        },
+    },
+    "get_system_status": {
+        "name": "get_system_status",
+        "description": "Get server system status including CPU usage, memory, uptime, and active services.",
+        "fn": get_system_status,
+        "params_schema": {
+            "type": "object",
+            "properties": {
+                "format": {"type": "string", "enum": ["summary", "detailed"], "default": "summary"},
+            },
+        },
+    },
+    "get_disk_usage": {
+        "name": "get_disk_usage",
+        "description": "Check disk space usage across all mounted volumes. Returns total, used, free space and usage percentage.",
+        "fn": get_disk_usage,
+        "params_schema": {"type": "object", "properties": {}},
+    },
+    "find_large_files": {
+        "name": "find_large_files",
+        "description": "Find the largest files in a directory, sorted by size descending.",
+        "fn": find_large_files,
+        "params_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path to search", "default": "/var/log"},
+                "top_n": {"type": "integer", "description": "Number of largest files to return", "default": 10},
+            },
+        },
+    },
+    "search_logs": {
+        "name": "search_logs",
+        "description": "Search system logs for matching entries. Returns timestamps, severity levels, services, and messages.",
+        "fn": search_logs,
+        "params_schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Search pattern (e.g. ERROR, timeout, connection)"},
+                "days": {"type": "integer", "description": "Number of days to look back", "default": 1},
+                "level": {"type": "string", "enum": ["ERROR", "WARNING", "INFO", "CRITICAL"], "default": "ERROR"},
+            },
+        },
+    },
+    "generate_report": {
+        "name": "generate_report",
+        "description": "Generate a formatted report with a title and optional timeline.",
+        "fn": generate_report,
+        "params_schema": {
+            "type": "object",
+            "properties": {
+                "format": {"type": "string", "enum": ["markdown", "text"], "default": "markdown"},
+                "title": {"type": "string", "description": "Report title"},
+                "include_timeline": {"type": "boolean", "default": False},
+            },
+        },
+    },
+    "list_directory": {
+        "name": "list_directory",
+        "description": "List files and directories at a given path.",
+        "fn": list_directory,
+        "params_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path", "default": "."},
+                "limit": {"type": "integer", "description": "Max number of files to return", "default": 50},
+            },
+        },
+    },
+    "get_current_time": {
+        "name": "get_current_time",
+        "description": "Get the current date and time including weekday.",
+        "fn": get_current_time,
+        "params_schema": {"type": "object", "properties": {}},
+    },
 }

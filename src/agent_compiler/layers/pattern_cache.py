@@ -74,7 +74,10 @@ class PatternCache:
         self.ram.put(wf)
         self.disk.save(wf)
         if wf.embedding is None:
-            wf.embedding = self.embeddings.encode(wf.intent)
+            # Use original input (Chinese) for embedding — keywords alone
+            # are too sparse for FAISS n-gram overlap with future queries.
+            embed_text = wf.original_input or (" ".join(wf.keywords) if wf.keywords else wf.intent)
+            wf.embedding = self.embeddings.encode(embed_text)
         self.embeddings.add(wf)
 
     def _load_workflow(self, wf_id: str) -> WorkflowTemplate | None:
@@ -98,6 +101,7 @@ class PatternCache:
                 hit_count=data.get("hit_count", 0),
                 confidence=data.get("confidence", 1.0),
                 params_schema=data.get("params_schema", {}),
+                keywords=data.get("keywords", []),
             )
             self.disk.save(wf)
             self.ram.put(wf)

@@ -10,7 +10,8 @@ build/
 .pytest_cache/
 agent_cache/
 demo_cache/
-demo_test_cache/
+demo_test_cache*/
+config.yaml
 proxy_cache/
 
 # Virtual environments

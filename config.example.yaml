@@ -1,0 +1,22 @@
+# Agent Compiler 配置文件
+# 复制此文件为 config.yaml 并填入你的 API key
+# cp config.example.yaml config.yaml
+
+# ── LLM 配置 ──────────────────────────────────────────
+llm:
+  # 模式: mock | claude | openai | openai_compat
+  provider: openai_compat
+
+  # API 密钥（填入你自己的 key）
+  api_key: "sk-your-api-key-here"
+
+  # 自定义 API 地址
+  api_base: "https://api.deepseek.com"
+
+  # 模型名
+  model: "deepseek-chat"
+
+# ── 缓存配置 ──────────────────────────────────────────
+cache:
+  dir: "./agent_cache"
+  similarity_threshold: 0.30

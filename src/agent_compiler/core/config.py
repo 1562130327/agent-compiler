@@ -35,19 +35,22 @@ class LLMConfig:
 class AgentConfig:
     """Full agent configuration.
 
-    Priority: constructor kwargs > env vars > defaults
+    Priority: constructor kwargs > config.yaml > env vars > defaults
 
     Environment variables:
         LLM_PROVIDER, LLM_API_KEY, LLM_API_BASE, LLM_MODEL
-        AGENT_CACHE_DIR, AGENT_SIMILARITY_THRESHOLD, AGENT_RULES_PATH
+        AGENT_CACHE_DIR, AGENT_SIMILARITY_THRESHOLD
+        AGENT_MAX_TURNS, AGENT_MAX_SESSION_MSGS
     """
     llm: LLMConfig = field(default_factory=LLMConfig)
     cache_dir: str = "./agent_cache"
     similarity_threshold: float = 0.50
-    rules_path: str | None = None
     embedding_mode: str = "lightweight"   # lightweight | neural
     ram_max_entries: int = 1000
     ram_max_memory_mb: float = 200.0
+    max_turns: int = 10                  # ReAct loop max iterations
+    max_session_messages: int = 50       # conversation context window
+    cache_seeds_path: str | None = None  # path to YAML file for cache pre-seeding
 
     @classmethod
     def from_env(cls, **overrides) -> AgentConfig:
@@ -62,7 +65,6 @@ class AgentConfig:
             model=overrides.pop("llm_model", None)
                   or os.environ.get("LLM_MODEL", ""),
         )
-        # Set default model per provider
         if not llm.model:
             llm.model = {
                 "claude": "claude-sonnet-4-6",
@@ -70,15 +72,13 @@ class AgentConfig:
                 "openai_compat": "gpt-4o-mini",
             }.get(llm.provider, "")
 
-        cache_dir = overrides.pop("cache_dir", None) or os.environ.get("AGENT_CACHE_DIR", "./agent_cache")
-        threshold = float(overrides.pop("similarity_threshold", None) or os.environ.get("AGENT_SIMILARITY_THRESHOLD", "0.50"))
-        rules_path = overrides.pop("rules_path", None) or os.environ.get("AGENT_RULES_PATH") or None
-
         return cls(
             llm=llm,
-            cache_dir=cache_dir,
-            similarity_threshold=threshold,
-            rules_path=rules_path,
+            cache_dir=overrides.pop("cache_dir", None) or os.environ.get("AGENT_CACHE_DIR", "./agent_cache"),
+            similarity_threshold=float(overrides.pop("similarity_threshold", None) or os.environ.get("AGENT_SIMILARITY_THRESHOLD", "0.50")),
+            max_turns=int(overrides.pop("max_turns", None) or os.environ.get("AGENT_MAX_TURNS", "10")),
+            max_session_messages=int(overrides.pop("max_session_messages", None) or os.environ.get("AGENT_MAX_SESSION_MSGS", "50")),
+            cache_seeds_path=overrides.pop("cache_seeds_path", None) or os.environ.get("AGENT_CACHE_SEEDS"),
             **overrides,
         )
 
@@ -93,7 +93,7 @@ class AgentConfig:
 
         llm_data = cfg_data.get("llm", {})
         cache_data = cfg_data.get("cache", {})
-        rules_data = cfg_data.get("rules", {})
+        agent_data = cfg_data.get("agent", {})
 
         llm = LLMConfig(
             provider=overrides.pop("llm_provider", None)
@@ -116,6 +116,8 @@ class AgentConfig:
             llm=llm,
             cache_dir=overrides.pop("cache_dir", None) or cache_data.get("dir", "./agent_cache"),
             similarity_threshold=float(overrides.pop("similarity_threshold", None) or cache_data.get("similarity_threshold", 0.50)),
-            rules_path=overrides.pop("rules_path", None) or rules_data.get("path"),
+            max_turns=int(overrides.pop("max_turns", None) or agent_data.get("max_turns", 10)),
+            max_session_messages=int(overrides.pop("max_session_messages", None) or agent_data.get("max_session_messages", 50)),
+            cache_seeds_path=overrides.pop("cache_seeds_path", None) or cache_data.get("seeds_path"),
             **overrides,
         )

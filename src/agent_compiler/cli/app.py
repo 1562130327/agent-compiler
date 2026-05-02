@@ -2,15 +2,15 @@
 """CLI entry point for Agent Compiler.
 
 Usage:
-    python -m agent_compiler.cli.app           # interactive mode (mock)
-    python -m agent_compiler.cli.app --cli     # single-query CLI mode
-    python -m agent_compiler.cli.app --report  # show cache stats and exit
+    agent-compiler                    # interactive chat mode (mock)
+    agent-compiler --query "..."      # single query
+    agent-compiler --report           # show cache stats and exit
 
 Environment variables for real LLM:
     LLM_PROVIDER=openai_compat
     LLM_API_KEY=sk-xxx
-    LLM_API_BASE=https://your-endpoint/v1
-    LLM_MODEL=your-model
+    LLM_API_BASE=https://api.deepseek.com
+    LLM_MODEL=deepseek-chat
 """
 
 import json
@@ -20,104 +20,109 @@ from pathlib import Path
 from agent_compiler.core.agent import Agent
 from agent_compiler.core.config import AgentConfig
 
-# ── Demo queries for interactive mode ────────────────────────────────
-
-_QUERIES = [
-    ("查看服务器状态",       "L1: keyword rule hit"),
-    ("帮我查看昨天的错误日志并生成报告", "L3: LLM, first time -> compiled & cached"),
-    ("查看最近的错误日志并写个汇总报告", "L2: cache hit, pure CPU"),
-    ("看看磁盘空间还剩多少",  "L1: keyword rule hit"),
-    ("分析 /var/log 下最大的 10 个文件", "L3: LLM, new task -> compiled"),
-    ("帮我看看硬盘空间够不够", "L2: cache hit (similar to disk query)"),
-    ("现在几点？",            "L1: keyword rule hit"),
-    ("搜索日志里包含 timeout 的内容", "L3: LLM, log search -> compiled"),
-    ("搜索日志里包含 connection 的内容", "L2: cache hit (similar to above)"),
-]
-
-
-# ── Output formatting ────────────────────────────────────────────────
 
 def _print_result(result):
-    source = result.source.upper()
-    labels = {"RULE": "L1", "CACHE": "L2", "LLM": "L3"}
+    """Display an agent result nicely."""
+    source_label = {"cache": "CACHE", "llm": "LLM"}.get(result.source, result.source)
 
-    print(f"\n  [{labels.get(source, source)}] {source} "
-          f"| latency: {result.latency_ms:.2f}ms "
-          f"| confidence: {result.confidence}")
-
-    if result.workflow_id:
-        print(f"       workflow: {result.workflow_id}")
-
-    if not result.success:
-        print(f"       error: {result.error}")
-        return
-
-    data = result.data
-    if "steps" in data:
-        print(f"       steps executed:")
-        for i, s in enumerate(data["steps"], 1):
+    # Show conversational text if available
+    if result.text:
+        print(f"\n{result.text}")
+        print(f"\n  [{source_label}] {result.latency_ms:.1f}ms")
+    elif result.success and "steps" in result.data:
+        print(f"\n  [{source_label}] {result.latency_ms:.1f}ms")
+        for s in result.data["steps"]:
             status = "OK" if s.get("success") else "FAIL"
             err = f" ({s.get('error', '')})" if not s.get("success") else ""
-            print(f"         {i}. [{s['tool']}] {status}{err}")
-    elif "tool" in data:
-        status = "OK" if data.get("success") else "FAIL"
-        print(f"       tool: {data['tool']} {status}")
+            print(f"    {s['tool']}: {status}{err}")
+    elif not result.success:
+        print(f"\n  [{source_label}] Error: {result.error}")
 
-
-# ── Entry points ─────────────────────────────────────────────────────
 
 def interactive(agent: Agent):
-    """Interactive numbered-query demo."""
+    """Interactive chat mode with multi-turn conversation."""
+
     print("\n" + "=" * 55)
-    print("  Agent Compiler -- Three-Layer Dispatch Demo")
+    print("  Agent Compiler — 对话模式")
     print("=" * 55)
-    print("  L1: Rule Engine   (keyword/regex, CPU, microseconds)")
-    print("  L2: Pattern Cache (embedding similarity, CPU, millisec)")
-    print("  L3: LLM Fallback  (GPU inference, seconds)")
+    print("  直接打字即可，Agent 会分析意图并执行。")
+    print("  交互越多，缓存越丰富，响应越快。")
     print("=" * 55)
     print(f"  LLM: {agent.llm.config_summary['provider']} "
           f"({agent.llm.config_summary['model']})")
     print("=" * 55)
+    print()
+    print("  输入「报告」看统计，「帮助」看用法，「退出」结束。")
+    print()
+
+    session_id = None
 
     while True:
-        print()
-        for i, (q, hint) in enumerate(_QUERIES, 1):
-            print(f"  [{i}] {q}")
-            print(f"      -> {hint}")
-        print(f"\n  [r] efficiency report")
-        print(f"  [s] detailed stats (JSON)")
-        print(f"  [c] custom input")
-        print(f"  [q] quit")
-
-        choice = input("\n  Select: ").strip()
-
-        if choice == "q":
-            print("  Goodbye!")
+        try:
+            user_input = input("  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  再见!")
             break
-        elif choice == "r":
+
+        if not user_input:
+            continue
+
+        inp_lower = user_input.lower()
+        inp_len = len(user_input)
+
+        # ── Built-in commands (short input only) ─────────────────
+        def _is_cmd(*keywords: str) -> bool:
+            if inp_len > 6:
+                return False
+            return any(k in inp_lower for k in keywords)
+
+        if _is_cmd("退出", "再见", "quit", "exit", "q"):
             print(f"\n{agent.efficiency_report()}")
-        elif choice == "s":
-            print(json.dumps(agent.stats(), indent=2, ensure_ascii=False))
-        elif choice == "c":
-            user_input = input("  Query: ").strip()
-            if user_input:
-                result = agent.process(user_input)
-                _print_result(result)
-        else:
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(_QUERIES):
-                    query, hint = _QUERIES[idx]
-                    print(f'\n  Query: "{query}"')
-                    print(f"  Expected: {hint}")
-                    result = agent.process(query)
-                    _print_result(result)
-                    if agent._metrics["total"] % 3 == 0:
-                        print(f"\n{agent.efficiency_report()}")
-                else:
-                    print("  Invalid choice")
-            except ValueError:
-                print("  Invalid choice")
+            print("\n  再见!")
+            break
+
+        if _is_cmd("帮助", "help", "?", "？"):
+            print()
+            print("  Agent Compiler — 使用说明")
+            print("  " + "-" * 40)
+            print("  直接输入你想做的事，比如：")
+            print("    - 查看服务器状态")
+            print("    - 帮我查一下错误日志")
+            print("    - 磁盘空间还剩多少")
+            print("    - 现在几点")
+            print()
+            print("  内置指令（短输入）：")
+            print("    报告 / 统计  — 查看效率报告")
+            print("    清除 / 清空  — 清除缓存重新开始")
+            print("    帮助 / help  — 显示本帮助")
+            print("    退出 / quit  — 退出程序")
+            print()
+            continue
+
+        if _is_cmd("报告", "统计", "report", "stats"):
+            print(f"\n{agent.efficiency_report()}")
+            continue
+
+        if _is_cmd("清除", "清空", "重置", "clear", "reset"):
+            agent.cache.ram._cache.clear()
+            agent.cache.embeddings._faiss = None
+            agent.cache.embeddings._index.clear()
+            agent.cache.embeddings._next_id = 0
+            agent._metrics = {"cache": 0, "llm": 0, "total": 0}
+            session_id = None
+            print("  缓存已清空，计数器已归零。")
+            continue
+
+        # ── Normal query ───────────────────────────────────────
+        result = agent.process(user_input, session_id=session_id)
+        if session_id is None and result.workflow_id:
+            # Start tracking session for multi-turn
+            session_id = f"sess_{result.workflow_id}"
+        _print_result(result)
+
+        if agent._metrics["total"] % 5 == 0:
+            print(f"\n  [自动报告 — 每 5 次查询触发]")
+            print(agent.efficiency_report())
 
 
 def main():
@@ -125,9 +130,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Agent Compiler - Three-layer dispatch agent")
+        description="Agent Compiler - AI Agent with automatic caching")
     parser.add_argument("--interactive", "-i", action="store_true",
-                        help="Interactive demo mode (default)")
+                        help="Interactive chat mode (default)")
     parser.add_argument("--query", "-q", type=str,
                         help="Single query mode")
     parser.add_argument("--report", "-r", action="store_true",
@@ -136,20 +141,20 @@ def main():
                         help="Path to config.yaml")
     parser.add_argument("--provider", type=str,
                         help="LLM provider: mock|claude|openai|openai_compat")
-    parser.add_argument("--api-key", type=str,
-                        help="LLM API key")
-    parser.add_argument("--api-base", type=str,
-                        help="Custom API base URL")
-    parser.add_argument("--model", type=str,
-                        help="Model name")
+    parser.add_argument("--api-key", type=str, help="LLM API key")
+    parser.add_argument("--api-base", type=str, help="Custom API base URL")
+    parser.add_argument("--model", type=str, help="Model name")
     parser.add_argument("--cache-dir", type=str, default="./agent_cache",
                         help="Cache directory")
     parser.add_argument("--threshold", type=float, default=0.50,
                         help="Similarity threshold (0-1)")
+    parser.add_argument("--max-turns", type=int, default=10,
+                        help="ReAct loop max iterations")
+    parser.add_argument("--seeds", type=str, default="rules.yaml",
+                        help="Cache seeds YAML file")
 
     args = parser.parse_args()
 
-    # Build config
     kwargs = dict(
         llm_provider=args.provider,
         llm_api_key=args.api_key,
@@ -157,20 +162,47 @@ def main():
         llm_model=args.model,
         cache_dir=args.cache_dir,
         similarity_threshold=args.threshold,
+        max_turns=args.max_turns,
+        cache_seeds_path=args.seeds,
     )
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
+    def _find_upwards(filename: str) -> str | None:
+        """Search CWD, parent dirs, and common locations for a file."""
+        # 1. CWD and parent directories
+        d = Path.cwd().resolve()
+        for _ in range(5):
+            p = d / filename
+            if p.exists():
+                return str(p)
+            if d.parent == d:
+                break
+            d = d.parent
+        # 2. Package source tree (for dev installs)
+        src = Path(__file__).resolve().parent.parent.parent.parent
+        p = src / filename
+        if p.exists():
+            return str(p)
+        # 3. User home
+        home = Path.home()
+        for sub in (".agent-compiler", ".config/agent-compiler", "agent-compiler"):
+            p = home / sub / filename
+            if p.exists():
+                return str(p)
+        return None
+
     if args.config:
         config = AgentConfig.from_yaml(args.config, **kwargs)
-    elif Path("config.yaml").exists():
-        config = AgentConfig.from_yaml("config.yaml", **kwargs)
     else:
-        config = AgentConfig.from_env(**kwargs)
+        found = _find_upwards("config.yaml")
+        if found:
+            config = AgentConfig.from_yaml(found, **kwargs)
+        else:
+            config = AgentConfig.from_env(**kwargs)
 
     agent = Agent(config)
 
     if args.report:
-        # Load existing cache and show stats
         agent.load_cache_from_disk()
         print(agent.efficiency_report())
         return
@@ -181,7 +213,6 @@ def main():
         print(f"\n{agent.efficiency_report()}")
         return
 
-    # Default: interactive mode
     interactive(agent)
 
 
