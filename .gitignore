@@ -33,3 +33,8 @@ Thumbs.db
 
 # Output
 output/
+comic_data/
+comic_skills/
+.agent-compiler/skills/
+server.log
+*.log

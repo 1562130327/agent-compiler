@@ -96,6 +96,23 @@ class LLMProvider:
             "api_key": masked if self.api_key else "(not set)",
         }
 
+    def chat(self, prompt: str, system: str = "", max_tokens: int = 2048) -> str:
+        """Simple prompt→response call — no tools, no ReAct loop."""
+        if self.provider == "mock":
+            return ""
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        if self.provider == "claude":
+            resp = self._claude_turn(messages, [])
+            return resp.get("reply", resp.get("text", ""))
+        elif self.provider in ("openai", "openai_compat"):
+            resp = self._openai_turn(messages, [])
+            return resp.get("reply", resp.get("text", ""))
+        return ""
+
     # ── ReAct loop ─────────────────────────────────────────────────
 
     def react(self, user_input: str, context: list[dict],
@@ -556,7 +573,7 @@ Do NOT wrap in markdown. Output ONLY valid JSON."""
 
         # Try to parse JSON from text (for providers without native tool support)
         parsed = self._try_parse_json(text)
-        if parsed:
+        if parsed and isinstance(parsed, dict):
             intent = parsed.get("intent", "task")
             if parsed.get("tool_calls"):
                 result["tool_calls"] = parsed["tool_calls"]

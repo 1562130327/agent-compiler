@@ -111,4 +111,8 @@ class ToolRegistry:
             from agent_compiler.tools.system_tools import _SYSTEM_TOOLS, _SYSTEM_TOOL_DEFS
             cls._tools.update(_SYSTEM_TOOLS)
             cls._defs.update(_SYSTEM_TOOL_DEFS)
+            # Load ComfyUI tools
+            from agent_compiler.tools.comfyui_tools import _COMFYUI_TOOLS, _COMFYUI_TOOL_DEFS
+            cls._tools.update(_COMFYUI_TOOLS)
+            cls._defs.update(_COMFYUI_TOOL_DEFS)
             cls._initialized = True

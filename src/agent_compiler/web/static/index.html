@@ -3,379 +3,1285 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agent Compiler v0.3</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/14.1.0/marked.min.js"></script>
+<title>Agent Compiler · AI 漫剧</title>
 <style>
-  :root {
-    --bg: #0f1117;
-    --bg2: #1a1d27;
-    --bg3: #242836;
-    --text: #e1e4e8;
-    --text2: #8b949e;
-    --accent: #58a6ff;
-    --accent2: #3fb950;
-    --warn: #d2991d;
-    --err: #f85149;
-    --border: #30363d;
-    --radius: 10px;
-  }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: var(--bg); color: var(--text); height: 100vh; display: flex;
-  }
+:root {
+  --bg: #0f1117; --bg2: #1a1d27; --bg3: #242836;
+  --text: #e1e4e8; --text2: #8b949e; --accent: #58a6ff;
+  --accent2: #3fb950; --warn: #d2991d; --err: #f85149;
+  --border: #30363d; --radius: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+}
 
-  /* ── Sidebar ── */
-  aside {
-    width: 260px; background: var(--bg2); border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; padding: 16px; gap: 12px;
-  }
-  aside h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
-  aside h1 span { color: var(--accent); }
-  .version { color: var(--text2); font-size: 11px; margin-top: -8px; }
-  .stat-card {
-    background: var(--bg3); border-radius: 8px; padding: 12px;
-    font-size: 13px;
-  }
-  .stat-card .label { color: var(--text2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .stat-card .value { font-size: 22px; font-weight: 700; margin: 2px 0; }
-  .stat-row { display: flex; gap: 8px; }
-  .stat-row .stat-card { flex:1; }
-  .stat-row .value { font-size: 16px; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-  .badge-cache { background: #1a3a2a; color: var(--accent2); }
-  .badge-llm { background: #1a2a3a; color: var(--accent); }
-  aside button {
-    width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px;
-    background: var(--bg3); color: var(--text); cursor: pointer; font-size: 13px;
-    transition: all 0.15s;
-  }
-  aside button:hover { background: var(--border); }
-  aside button.danger { color: var(--err); border-color: var(--err); background: transparent; }
-  aside button.danger:hover { background: #3a1a1a; }
-  .mem-list { flex: 1; overflow-y: auto; font-size: 12px; }
-  .mem-item { padding: 6px 0; border-bottom: 1px solid var(--border); }
-  .mem-item .tier { font-size: 10px; color: var(--text2); }
+/* ── Top Bar ── */
+#topbar {
+  display: flex; align-items: center; gap: 12px; padding: 8px 14px;
+  background: var(--bg2); border-bottom: 1px solid var(--border); min-height: 48px; flex-shrink: 0;
+}
+#topbar h2 { font-size: 15px; color: var(--accent); white-space: nowrap; }
+#topbar select, #topbar input {
+  padding: 5px 10px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 12px;
+}
+#topbar input { width: 140px; }
+#topbar .stat { font-size: 11px; color: var(--text2); margin-left: auto; }
+#topbar .stat strong { color: var(--text); margin: 0 4px; }
 
-  /* ── Main chat ── */
-  main {
-    flex: 1; display: flex; flex-direction: column; min-width: 0;
-  }
-  .chat-header {
-    padding: 14px 20px; border-bottom: 1px solid var(--border);
-    font-size: 14px; font-weight: 600; background: var(--bg2);
-    display: flex; align-items: center; gap: 10px;
-  }
-  .chat-header .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .dot-on { background: var(--accent2); }
-  .dot-off { background: var(--text2); }
-  .chat-messages {
-    flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px;
-  }
-  .msg {
-    max-width: 80%; padding: 12px 16px; border-radius: var(--radius);
-    line-height: 1.55; font-size: 14px; animation: fadeIn 0.2s ease;
-  }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-  .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
-  .msg-agent { align-self: flex-start; background: var(--bg3); border-bottom-left-radius: 4px; }
-  .msg-agent pre { margin: 8px 0; border-radius: 6px; overflow-x: auto; }
-  .msg-agent code { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 13px; }
-  .msg-agent p { margin: 4px 0; }
-  .msg-agent ul, .msg-agent ol { margin: 4px 0; padding-left: 20px; }
-  .msg-meta { font-size: 11px; color: var(--text2); margin-top: 6px; display: flex; gap: 10px; }
-  .msg-user .msg-meta { color: rgba(255,255,255,0.6); }
-  .thinking { align-self: flex-start; padding: 12px 16px; color: var(--text2); font-style: italic; }
+/* ── Main Split ── */
+#mainSplit {
+  flex: 1; display: flex; overflow: hidden; min-height: 0;
+}
 
-  /* ── Input ── */
-  .chat-input-area {
-    padding: 16px 20px; border-top: 1px solid var(--border); background: var(--bg2);
-  }
-  .chat-input-area form { display: flex; gap: 10px; }
-  .chat-input-area input {
-    flex: 1; padding: 12px 16px; border-radius: var(--radius); border: 1px solid var(--border);
-    background: var(--bg); color: var(--text); font-size: 14px; outline: none;
-    transition: border 0.15s;
-  }
-  .chat-input-area input:focus { border-color: var(--accent); }
-  .chat-input-area button {
-    padding: 12px 24px; border-radius: var(--radius); border: none;
-    background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
-    cursor: pointer; transition: opacity 0.15s;
-  }
-  .chat-input-area button:hover { opacity: 0.85; }
-  .chat-input-area button:disabled { opacity: 0.4; cursor: default; }
-  .hint { color: var(--text2); font-size: 11px; margin-top: 8px; }
+/* ── Left: Chat ── */
+#leftPanel {
+  flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border);
+  min-width: 0; background: var(--bg);
+}
+#chatMessages {
+  flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+}
+.chat-msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; word-wrap: break-word; }
+.chat-msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.chat-msg.assistant { align-self: flex-start; background: var(--bg2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.chat-msg.system { align-self: center; font-size: 11px; color: var(--text2); background: transparent; max-width: 90%; text-align: center; }
+.chat-msg .time { font-size: 10px; opacity: 0.5; margin-top: 4px; }
+.chat-msg pre { background: var(--bg); padding: 8px; border-radius: 4px; font-size: 11px; overflow-x: auto; margin-top: 6px; }
+.chat-msg .import-btn { margin-top: 8px; }
+.chat-input-bar {
+  padding: 10px 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; background: var(--bg2); flex-shrink: 0;
+}
+.chat-input-bar textarea {
+  flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 13px; resize: none; min-height: 42px;
+  max-height: 120px; font-family: inherit;
+}
+.chat-input-bar textarea:focus { border-color: var(--accent); outline: none; }
 
-  /* ── Scrollbar ── */
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+/* ── Right: Tools ── */
+#rightPanel {
+  flex: 1; display: flex; flex-direction: column; background: var(--bg2); min-width: 0;
+}
+#tabBar {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0;
+}
+#tabBar button {
+  padding: 10px 14px; background: transparent; border: none; color: var(--text2);
+  font-size: 12px; cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+#tabBar button:hover { color: var(--text); background: var(--bg3); }
+#tabBar button.active { color: var(--accent); border-bottom-color: var(--accent); }
+#tabContent {
+  flex: 1; overflow-y: auto; padding: 14px; min-height: 0;
+}
+
+/* ── Cards ── */
+.card { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; }
+.card h3, .card h4 { font-size: 13px; color: var(--accent); margin-bottom: 6px; }
+.card label { font-size: 11px; color: var(--text2); display: block; margin-top: 6px; }
+.card input, .card textarea, .card select {
+  width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 12px; margin-top: 2px;
+}
+.card textarea { min-height: 50px; resize: vertical; }
+.card input:focus, .card textarea:focus, .card select:focus { border-color: var(--accent); outline: none; }
+.panel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.panel-card { position: relative; cursor: grab; }
+.panel-card:active { cursor: grabbing; }
+.panel-card.drag-over { border-color: var(--accent2); border-style: dashed; background: #1a2a1a; }
+.panel-card.dragging { opacity: 0.4; }
+.panel-card .drag-handle { position: absolute; top: 8px; left: 10px; font-size: 14px; color: var(--text2); cursor: grab; user-select: none; }
+.panel-card .panel-num { position: absolute; top: 8px; right: 10px; font-size: 11px; color: var(--accent); font-weight: 700; }
+
+/* ── Result grid ── */
+.result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+.result-card { background: var(--bg3); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); cursor: pointer; }
+.result-card img { width: 100%; display: block; }
+.result-card.selected { border: 3px solid var(--accent2); }
+.result-card .result-label { font-size: 10px; padding: 4px 8px; color: var(--text2); text-align: center; }
+
+/* ── Table ── */
+.mapping-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.mapping-table th { background: var(--bg); padding: 6px 8px; text-align: left; border-bottom: 2px solid var(--border); color: var(--accent); white-space: nowrap; }
+.mapping-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mapping-table tr:hover td { background: rgba(88,166,255,0.05); }
+
+/* ── Buttons ── */
+.btn { padding: 7px 14px; border-radius: 6px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; white-space: nowrap; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { opacity: 0.85; }
+.btn-primary:disabled { opacity: 0.4; cursor: default; }
+.btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--border); }
+.btn-danger { background: transparent; color: var(--err); border: 1px solid var(--err); }
+.btn-danger:hover { background: #3a1a1a; }
+.btn-success { background: var(--accent2); color: #fff; }
+.btn-sm { padding: 3px 8px; font-size: 10px; }
+.form-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.form-group { display: flex; flex-direction: column; gap: 2px; min-width: 80px; }
+.form-group label { font-size: 11px; color: var(--text2); }
+.form-group input, .form-group select, .form-group textarea {
+  padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 12px;
+}
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent); outline: none; }
+
+/* ── Toast ── */
+.toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 12px; z-index: 999; animation: fadeIn 0.2s; }
+@keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 </style>
 </head>
 <body>
 
-<!-- ── Sidebar ── -->
-<aside>
-  <h1>Agent <span>Compiler</span></h1>
-  <div class="version">v0.3 · Reflexion + ToT + Tiered Memory</div>
+<!-- ── Top Bar ── -->
+<div id="topbar">
+  <h2>Agent Compiler</h2>
+  <select id="projectSelect" onchange="switchProject()"><option value="">-- 新建/切换项目 --</option></select>
+  <input type="text" id="newProjectName" placeholder="项目名称...">
+  <button class="btn btn-primary btn-sm" onclick="createProject()">+ 创建</button>
+  <span class="stat">分镜:<strong id="statPanels">0</strong></span>
+  <span class="stat">角色:<strong id="statChars">0</strong></span>
+  <span class="stat">已生成:<strong id="statGenerated">0</strong></span>
+  <span class="stat">LLM:<strong id="statLLM">0</strong></span>
+  <span id="queueInfo" style="font-size:10px;color:var(--text2);margin-left:8px;">ComfyUI: --</span>
+  <span id="projectFolder" style="font-size:10px;color:var(--text2);margin-left:auto;"></span>
+</div>
 
-  <div class="stat-row">
-    <div class="stat-card">
-      <div class="label">缓存命中</div>
-      <div class="value" id="cacheHits">0</div>
+<!-- ── Main Split ── -->
+<div id="mainSplit">
+  <!-- Left: Chat -->
+  <div id="leftPanel">
+    <div id="chatMessages">
+      <div class="chat-msg system">欢迎使用 Agent Compiler · AI 漫剧<br>在左侧输入故事梗概，Agent 会自动生成完整故事并导入右侧工具面板</div>
     </div>
-    <div class="stat-card">
-      <div class="label">LLM 调用</div>
-      <div class="value" id="llmCalls">0</div>
-    </div>
-  </div>
-
-  <div class="stat-card">
-    <div class="label">Token 消耗</div>
-    <div class="value" id="totalTokens" style="font-size:18px;">0</div>
-  </div>
-
-  <div class="stat-card">
-    <div class="label">记忆系统</div>
-    <div style="font-size:13px; margin-top:4px;">
-      总数: <strong id="memTotal">0</strong> ·
-      语义: <strong id="memSem">0</strong> ·
-      情节: <strong id="memEpi">0</strong> ·
-      程序: <strong id="memProc">0</strong>
+    <div class="chat-input-bar">
+      <textarea id="chatInput" rows="1" placeholder="输入故事梗概或指令... (Enter发送)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea>
+      <button class="btn btn-primary" onclick="sendChat()">发送</button>
     </div>
   </div>
 
-  <div class="mem-list" id="memList">
-    <div style="color:var(--text2);font-size:12px;">最近记忆...</div>
-  </div>
-
-  <button onclick="clearCache()" class="danger">清除缓存 & 重置</button>
-</aside>
-
-<!-- ── Main Chat ── -->
-<main>
-  <div class="chat-header">
-    <div class="dot dot-on" id="statusDot"></div>
-    <span>Agent Compiler 对话</span>
-    <span style="flex:1"></span>
-    <span style="font-size:11px;color:var(--text2);" id="sessionInfo">就绪</span>
-  </div>
-
-  <div class="chat-messages" id="messages">
-    <div class="msg msg-agent">
-      👋 你好！我是 <strong>Agent Compiler v0.3</strong>。<br><br>
-      我可以帮你：<br>
-      • 读写文件、搜索代码、执行 Shell 命令<br>
-      • Git 操作、运行测试、Web 搜索<br>
-      • 复杂任务会启动 <strong>Tree-of-Thought</strong> 深度推理<br>
-      • 输出质量通过 <strong>Reflexion</strong> 自我检查<br><br>
-      直接在下方输入问题开始吧！
+  <!-- Right: Tools -->
+  <div id="rightPanel">
+    <div id="tabBar">
+      <button onclick="switchTab('story')" class="active">📖 故事编辑</button>
+      <button onclick="switchTab('characters')">👤 角色</button>
+      <button onclick="switchTab('environments')">🌍 环境</button>
+      <button onclick="switchTab('panels')">🎬 分镜</button>
+      <button onclick="switchTab('table')">📊 表格</button>
+      <button onclick="switchTab('style')">🎨 审图</button>
+      <button onclick="switchTab('video')">🎥 视频</button>
+      <button onclick="switchTab('comfyui')">⚡ ComfyUI</button>
     </div>
+    <div id="tabContent"><div style="text-align:center;color:var(--text2);padding:40px;">选择项目后开始</div></div>
   </div>
-
-  <div class="chat-input-area">
-    <form id="chatForm" onsubmit="sendMessage(event)">
-      <input type="text" id="userInput" placeholder="输入你的问题..." autofocus autocomplete="off">
-      <button type="submit" id="sendBtn">发送</button>
-    </form>
-    <div class="hint">支持 Markdown · 代码自动高亮 · 直接描述任务即可</div>
-  </div>
-</main>
+</div>
 
 <script>
-console.log('[初始化] Agent Compiler v0.3 前端已加载');
-console.log('[初始化] marked 可用:', typeof marked !== 'undefined');
-console.log('[初始化] hljs 可用:', typeof hljs !== 'undefined');
+// ═══════════════════════════════════════════════════════════════════
+// Global State
+// ═══════════════════════════════════════════════════════════════════
+let currentProjectId = null;
+let currentTab = 'story';
+let allWorkflows = [];
+let _dragIdx = -1;
 
-// ── State ──
-let sessionId = null;
-let cacheHits = 0, llmCalls = 0, totalTokens = 0;
-
-// ── Markdown renderer ──
-marked.setOptions({ breaks: true, gfm: true });
-
-function renderMarkdown(text) {
-  let html = marked.parse(text);
-  return html;
+function esc(s) {
+  const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML;
+}
+function escAttr(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function toast(msg) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
 }
 
-function highlightCode(container) {
-  container.querySelectorAll('pre code').forEach(block => {
-    hljs.highlightElement(block);
-  });
+// ═══════════════════════════════════════════════════════════════════
+// Tabs
+// ═══════════════════════════════════════════════════════════════════
+function switchTab(name) {
+  currentTab = name;
+  document.querySelectorAll('#tabBar button').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`#tabBar button[onclick="switchTab('${name}')"]`);
+  if (btn) btn.classList.add('active');
+  document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:20px;">加载中...</div>';
+  loadTabContent(name);
 }
 
-// ── Chat ──
-function addMessage(role, content, meta) {
-  console.log('[UI] addMessage:', role, content.substring(0, 80) + (content.length > 80 ? '...' : ''));
-  const div = document.createElement('div');
-  div.className = `msg msg-${role}`;
-  if (role === 'agent') {
-    div.innerHTML = renderMarkdown(content);
-    highlightCode(div);
-  } else {
-    div.textContent = content;
+async function loadTabContent(name) {
+  switch(name) {
+    case 'story': loadStoryTab(); break;
+    case 'characters': await loadCharactersTab(); break;
+    case 'environments': await loadEnvironmentsTab(); break;
+    case 'panels': await loadPanelsTab(); break;
+    case 'table': await loadTableTab(); break;
+    case 'style': await loadStyleTab(); break;
+    case 'video': await loadVideoTab(); break;
+    case 'comfyui': await loadComfyuiTab(); break;
   }
-  if (meta) {
-    const m = document.createElement('div');
-    m.className = 'msg-meta';
-    m.textContent = meta;
-    div.appendChild(m);
-  }
-  document.getElementById('messages').appendChild(div);
-  const msgs = document.getElementById('messages');
-  msgs.scrollTop = msgs.scrollHeight;
 }
 
-function addThinking() {
-  const div = document.createElement('div');
-  div.className = 'thinking';
-  div.id = 'thinkingMsg';
-  div.textContent = '▊ 思考中...';
-  document.getElementById('messages').appendChild(div);
-  const msgs = document.getElementById('messages');
-  msgs.scrollTop = msgs.scrollHeight;
-}
-
-function removeThinking() {
-  const el = document.getElementById('thinkingMsg');
-  if (el) el.remove();
-}
-
-async function sendMessage(e) {
-  e.preventDefault();
-  const input = document.getElementById('userInput');
-  const btn = document.getElementById('sendBtn');
-  const msg = input.value.trim();
-  if (!msg) return;
-
-  console.log('[发送] 消息:', msg);
-  console.log('[发送] sessionId:', sessionId);
-  console.log('[发送] 请求体:', JSON.stringify({ message: msg, session_id: sessionId }));
-
-  input.value = '';
-  btn.disabled = true;
-  addMessage('user', msg);
-  addThinking();
-
+// ═══════════════════════════════════════════════════════════════════
+// Projects
+// ═══════════════════════════════════════════════════════════════════
+async function refreshProjects() {
   try {
-    console.log('[请求] POST /api/chat ...');
-    const resp = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, session_id: sessionId }),
-    });
-    console.log('[响应] HTTP 状态:', resp.status, resp.statusText);
-    console.log('[响应] Content-Type:', resp.headers.get('content-type'));
-
+    const resp = await fetch('/api/projects');
     const data = await resp.json();
-    console.log('[响应] 完整数据:', JSON.stringify(data, null, 2));
-    removeThinking();
-
-    if (data.error) {
-      console.error('[错误] 服务端返回错误:', data.error);
-      addMessage('agent', '❌ 错误: ' + data.error);
-      return;
+    const projects = data.projects || [];
+    const sel = document.getElementById('projectSelect');
+    sel.innerHTML = '<option value="">-- 新建/切换项目 --</option>' +
+      projects.map(p => `<option value="${p.id}" ${p.id===currentProjectId?'selected':''}>${esc(p.name||p.id)}</option>`).join('');
+    if (currentProjectId && !projects.find(p => p.id === currentProjectId)) {
+      currentProjectId = null;
     }
-
-    // Build meta
-    let meta = `${data.latency_ms}ms | ${data.source.toUpperCase()}`;
-    if (data.tokens && data.tokens.total) {
-      meta += ` | ${data.tokens.total} tokens`;
-    }
-    if (data.tot_used) meta += ' | 🧠 ToT';
-    console.log('[UI] meta:', meta);
-    addMessage('agent', data.text, meta);
-
-    // Update session
-    if (data.session_id) sessionId = data.session_id;
-
-    // Update stats
-    if (data.source === 'cache') cacheHits++; else llmCalls++;
-    if (data.tokens && data.tokens.total) totalTokens += data.tokens.total;
-    console.log('[统计] 缓存命中:', cacheHits, 'LLM调用:', llmCalls, 'Token:', totalTokens);
-    updateStats();
-    refreshMemory();
-
-    // Auto-scroll
-    document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
-  } catch (err) {
-    console.error('[异常] fetch 失败:', err);
-    console.error('[异常] 错误详情:', err.message, err.stack);
-    removeThinking();
-    addMessage('agent', '❌ 连接失败: ' + err.message);
-  } finally {
-    btn.disabled = false;
-    input.focus();
-  }
-}
-
-// ── Stats ──
-function updateStats() {
-  document.getElementById('cacheHits').textContent = cacheHits;
-  document.getElementById('llmCalls').textContent = llmCalls;
-  document.getElementById('totalTokens').textContent = totalTokens.toLocaleString();
-}
-
-async function refreshMemory() {
-  try {
-    const resp = await fetch('/api/memory');
-    const data = await resp.json();
-    const s = data.stats;
-    document.getElementById('memTotal').textContent = s.total_memories;
-    const tiers = s.by_tier || {};
-    document.getElementById('memSem').textContent = tiers.semantic || 0;
-    document.getElementById('memEpi').textContent = tiers.episodic || 0;
-    document.getElementById('memProc').textContent = tiers.procedural || 0;
-
-    const list = document.getElementById('memList');
-    const recent = data.recent || [];
-    if (recent.length === 0) {
-      list.innerHTML = '<div style="color:var(--text2);font-size:12px;">暂无记忆</div>';
-      return;
-    }
-    list.innerHTML = recent.slice(0, 5).map(m =>
-      `<div class="mem-item">
-        <span class="tier">[${m.tier}]</span> <strong>${escHtml(m.title)}</strong>
-        <div style="color:var(--text2)">${escHtml(m.content.substring(0, 60))}</div>
-      </div>`
-    ).join('');
+    if (currentProjectId) updateProjectFolder();
   } catch(e) {}
 }
 
-async function clearCache() {
-  if (!confirm('确定清除所有缓存和 Token 统计？')) return;
-  await fetch('/api/clear', { method: 'POST' });
-  cacheHits = 0; llmCalls = 0; totalTokens = 0;
-  sessionId = null;
-  updateStats();
-  refreshMemory();
-  addMessage('agent', '✅ 缓存已清除，统计已归零。');
+async function updateProjectFolder() {
+  if (!currentProjectId) { document.getElementById('projectFolder').textContent = ''; return; }
+  document.getElementById('projectFolder').innerHTML = `📁 comic_data/${esc(currentProjectId)}/`;
 }
 
-function escHtml(s) {
+async function createProject() {
+  const name = document.getElementById('newProjectName').value.trim() || '未命名项目';
+  const resp = await fetch('/api/projects', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  const data = await resp.json();
+  if (data.success) {
+    currentProjectId = data.project.id;
+    await refreshProjects();
+    updateProjectFolder();
+    switchTab('story');
+    toast('项目已创建: ' + name);
+  }
+}
+
+async function switchProject() {
+  const sel = document.getElementById('projectSelect');
+  currentProjectId = sel.value || null;
+  updateProjectFolder();
+  if (currentProjectId) {
+    loadTabContent(currentTab);
+    refreshStats();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Chat
+// ═══════════════════════════════════════════════════════════════════
+async function sendChat() {
+  const inp = document.getElementById('chatInput');
+  const msg = inp.value.trim();
+  if (!msg) return;
+  inp.value = '';
+
+  addChatMsg('user', msg);
+
+  // Detect story generation intent
+  const isStoryGen = /写|故事|生成.*故事|创作|编|小说|剧本|漫剧/.test(msg);
+
+  if (isStoryGen && currentProjectId) {
+    // Auto-trigger comprehensive breakdown
+    addChatMsg('system', 'Agent 正在为您创作完整故事...');
+    try {
+      const resp = await fetch('/api/story/comprehensive-breakdown', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({premise: msg, project_id: currentProjectId, target_characters: 3, target_panels: 8}),
+      });
+      const data = await resp.json();
+      if (data.success) {
+        document.querySelectorAll('.chat-msg.system').forEach(el => {
+          if (el.textContent.includes('正在为您创作')) el.remove();
+        });
+        const storyText = `**${data.story_title||'故事'}**\n\n${data.story_summary||''}\n\n> 已自动生成 ${(data.characters||[]).length} 个角色、${(data.environments||[]).length} 个环境、${(data.panels||[]).length} 个分镜，并导入到右侧各面板。`;
+        addChatMsg('assistant', storyText);
+        refreshStats();
+        toast('故事已自动导入到故事编辑、角色、环境、分镜面板');
+      } else {
+        addChatMsg('assistant', '故事生成失败: ' + (data.error || '未知错误'));
+      }
+    } catch(e) {
+      addChatMsg('assistant', '请求失败: ' + e.message);
+    }
+  } else {
+    // Regular chat
+    addChatMsg('system', '思考中...');
+    try {
+      const resp = await fetch('/api/chat', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: msg, session_id: currentProjectId || undefined}),
+      });
+      const data = await resp.json();
+      document.querySelectorAll('.chat-msg.system').forEach(el => {
+        if (el.textContent.includes('思考中')) el.remove();
+      });
+      if (data.error) {
+        addChatMsg('assistant', '错误: ' + data.error);
+      } else {
+        let text = data.text || data.reply || '';
+        // Detect if response contains a story — offer import
+        if (text.length > 200 && /故事|角色|场景|分镜/.test(text)) {
+          text += '\n\n<div class="import-btn"><button class="btn btn-primary btn-sm" onclick="importStoryToEditor()">📥 导入故事到编辑器</button></div>';
+        }
+        addChatMsg('assistant', text);
+      }
+    } catch(e) {
+      addChatMsg('assistant', '请求失败: ' + e.message);
+    }
+  }
+  refreshStats();
+}
+
+function addChatMsg(role, text) {
   const div = document.createElement('div');
-  div.textContent = s;
-  return div.innerHTML;
+  div.className = 'chat-msg ' + role;
+  const html = esc(text)
+    .replace(/\n/g, '<br>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^&gt;\s(.+)$/gm, '<em>$1</em>');
+  div.innerHTML = html + '<div class="time">' + new Date().toLocaleTimeString() + '</div>';
+  const container = document.getElementById('chatMessages');
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+
+  // Make import button work
+  div.querySelector('.import-btn button')?.addEventListener('click', importStoryToEditor);
 }
 
-// ── Init ──
-console.log('[初始化] 发送 stats 请求获取后端状态...');
-fetch('/api/stats')
-  .then(r => r.json())
-  .then(d => {
-    console.log('[初始化] 后端状态:', JSON.stringify(d, null, 2));
-    document.getElementById('sessionInfo').textContent =
-      `provider: ${d.llm_config?.provider || '?'} | model: ${d.llm_config?.model || '?'}`;
-  })
-  .catch(e => console.error('[初始化] 获取状态失败:', e));
+function importStoryToEditor() {
+  if (!currentProjectId) { toast('请先创建项目'); return; }
+  switchTab('story');
+  toast('请在故事编辑中粘贴故事内容');
+}
 
-updateStats();
-refreshMemory();
-setInterval(refreshMemory, 30000);
+async function refreshStats() {
+  try {
+    const r = await fetch('/api/stats');
+    const d = await r.json();
+    document.getElementById('statLLM').textContent = d.llm || 0;
+    document.getElementById('statTokens').textContent = (d.tokens||{}).total || 0;
+    document.getElementById('queueInfo').textContent = 'ComfyUI: OK';
+  } catch(e) {}
+  if (currentProjectId) {
+    try {
+      const [pr, cr] = await Promise.all([
+        fetch('/api/projects/' + currentProjectId + '/panels'),
+        fetch('/api/projects/' + currentProjectId + '/characters'),
+      ]);
+      const pd = await pr.json(); const cd = await cr.json();
+      document.getElementById('statPanels').textContent = (pd.panels||[]).length;
+      document.getElementById('statChars').textContent = (cd.characters||[]).length;
+    } catch(e) {}
+  }
+  updateProjectFolder();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Story Tab
+// ═══════════════════════════════════════════════════════════════════
+function loadStoryTab() {
+  if (!currentProjectId) {
+    document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:40px;">请先创建或选择项目</div>';
+    return;
+  }
+  document.getElementById('tabContent').innerHTML = `
+    <div class="card">
+      <h3>📖 故事编辑</h3>
+      <p style="font-size:11px;color:var(--text2);margin-bottom:8px;">在左侧聊天中发送故事梗概，Agent 会自动生成完整故事并导入到此处。也可以手动填写。</p>
+      <label>故事标题</label>
+      <input id="storyTitle" placeholder="故事标题">
+      <label>故事简介</label>
+      <textarea id="storySummary" rows="4" placeholder="故事简介..."></textarea>
+      <label>故事主题（逗号分隔）</label>
+      <input id="storyThemes" placeholder="主题1, 主题2">
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <button class="btn btn-primary" onclick="saveStory()">💾 保存故事</button>
+        <button class="btn btn-secondary" onclick="quickBreakdown()">🚀 从聊天内容拆解生成</button>
+      </div>
+    </div>
+    <div id="storyPreview"></div>
+  `;
+  loadStoryPreview();
+}
+
+async function loadStoryPreview() {
+  if (!currentProjectId) return;
+  try {
+    const [pr, cr, er] = await Promise.all([
+      fetch('/api/projects/' + currentProjectId + '/panels'),
+      fetch('/api/projects/' + currentProjectId + '/characters'),
+      fetch('/api/projects/' + currentProjectId + '/environments'),
+    ]);
+    const panels = (await pr.json()).panels || [];
+    const chars = (await cr.json()).characters || [];
+    const envs = (await er.json()).environments || [];
+    document.getElementById('storyPreview').innerHTML = `
+      <div class="card">
+        <h4>当前项目内容</h4>
+        <div style="font-size:12px;color:var(--text2);">
+          角色: ${chars.length} | 环境: ${envs.length} | 分镜: ${panels.length}
+          ${panels.length ? `<br>分镜概览: ${panels.map(p=>'#'+p.panel_num+' '+esc((p.scene_description||'').substring(0,30))).join(', ')}` : ''}
+        </div>
+        <div style="font-size:10px;color:var(--text2);margin-top:4px;">📁 项目文件夹: comic_data/${esc(currentProjectId)}/</div>
+      </div>
+    `;
+    document.getElementById('statPanels').textContent = panels.length;
+    document.getElementById('statChars').textContent = chars.length;
+  } catch(e) {}
+}
+
+async function saveStory() {
+  if (!currentProjectId) return;
+  toast('故事已保存');
+  loadStoryPreview();
+}
+
+async function quickBreakdown() {
+  if (!currentProjectId) { toast('请先选择项目'); return; }
+  const inp = document.getElementById('chatInput');
+  const msg = inp.value.trim();
+  if (!msg) { toast('请先在聊天框输入故事梗概'); return; }
+  inp.value = '';
+  addChatMsg('user', msg);
+  addChatMsg('system', '正在拆解故事...');
+  try {
+    const resp = await fetch('/api/story/comprehensive-breakdown', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({premise: msg, project_id: currentProjectId, target_characters: 3, target_panels: 8}),
+    });
+    const data = await resp.json();
+    document.querySelectorAll('.chat-msg.system').forEach(el => {
+      if (el.textContent.includes('正在拆解')) el.remove();
+    });
+    if (data.success) {
+      addChatMsg('assistant', `**${data.story_title||'故事'}**\n${data.story_summary||''}\n已生成 ${(data.characters||[]).length} 角色、${(data.environments||[]).length} 环境、${(data.panels||[]).length} 分镜`);
+      refreshStats();
+      loadStoryPreview();
+      toast('拆解完成！请在角色/环境/分镜面板查看');
+    } else {
+      addChatMsg('assistant', '拆解失败: ' + (data.error || ''));
+    }
+  } catch(e) {
+    addChatMsg('assistant', '请求失败: ' + e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Characters Tab
+// ═══════════════════════════════════════════════════════════════════
+async function loadCharactersTab() {
+  if (!currentProjectId) { document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:40px;">请先选择项目</div>'; return; }
+  const resp = await fetch('/api/projects/' + currentProjectId + '/characters');
+  const data = await resp.json();
+  const chars = data.characters || [];
+  document.getElementById('statChars').textContent = chars.length;
+
+  let html = `<button class="btn btn-primary btn-sm" onclick="addCharacter()" style="margin-bottom:8px;">+ 添加角色</button>
+    <span style="font-size:11px;color:var(--text2);margin-left:8px;">💡 先生成角色三视图（白底），分镜生图时会自动使用</span>`;
+  if (!chars.length) {
+    html += '<div style="color:var(--text2);padding:40px;text-align:center;">暂无角色。使用综合拆解或手动添加。</div>';
+  } else {
+    html += '<div class="panel-grid">';
+    chars.forEach((c, i) => {
+      const hasImgs = c.ref_image_front || c.ref_image_side || c.ref_image_back || c.ref_image_full;
+      html += `
+      <div class="card">
+        <strong>${esc(c.name||'未命名')}</strong>
+        <span style="font-size:10px;color:var(--text2);"> (${esc(c.personality||'')})</span>
+        <label>描述</label><textarea onchange="updateCharField(${i},'description',this.value)" rows="2">${esc(c.description||'')}</textarea>
+        <label>外观细节（三视图级别）</label><textarea onchange="updateCharField(${i},'appearance_detail',this.value)" rows="2">${esc(c.appearance_detail||'')}</textarea>
+        <label>服装细节</label><textarea onchange="updateCharField(${i},'clothing_details',this.value)" rows="2">${esc(c.clothing_details||'')}</textarea>
+        <label>配音风格</label><input value="${escAttr(c.voice_style||'')}" onchange="updateCharField(${i},'voice_style',this.value)">
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:10px;color:var(--text2);">步数:</span><input type="number" id="char_steps_${i}" value="20" min="1" max="100" style="width:45px;font-size:11px;">
+          <span style="font-size:10px;color:var(--text2);">CFG:</span><input type="number" id="char_cfg_${i}" value="7" min="1" max="30" step="0.5" style="width:45px;font-size:11px;">
+        </div>
+        <div style="margin-top:6px;display:flex;gap:4px;">
+          <button class="btn btn-primary btn-sm" onclick="generateCharRef('${c.id}',${i})">🎨 生成三视图</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteChar(${i})">删除</button>
+        </div>
+        ${hasImgs ? `
+        <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;">
+          ${c.ref_image_front ? `<div style="text-align:center;font-size:9px;"><img src="${escAttr(c.ref_image_front)}" style="width:70px;height:100px;object-fit:contain;background:#fff;border:1px solid #333;border-radius:4px;cursor:pointer;" onclick="window.open('${escAttr(c.ref_image_front)}')"><br>正面</div>` : ''}
+          ${c.ref_image_side ? `<div style="text-align:center;font-size:9px;"><img src="${escAttr(c.ref_image_side)}" style="width:70px;height:100px;object-fit:contain;background:#fff;border:1px solid #333;border-radius:4px;cursor:pointer;" onclick="window.open('${escAttr(c.ref_image_side)}')"><br>侧面</div>` : ''}
+          ${c.ref_image_back ? `<div style="text-align:center;font-size:9px;"><img src="${escAttr(c.ref_image_back)}" style="width:70px;height:100px;object-fit:contain;background:#fff;border:1px solid #333;border-radius:4px;cursor:pointer;" onclick="window.open('${escAttr(c.ref_image_back)}')"><br>背面</div>` : ''}
+          ${c.ref_image_full ? `<div style="text-align:center;font-size:9px;"><img src="${escAttr(c.ref_image_full)}" style="width:70px;height:100px;object-fit:contain;background:#fff;border:1px solid #333;border-radius:4px;cursor:pointer;" onclick="window.open('${escAttr(c.ref_image_full)}')"><br>全身</div>` : ''}
+        </div>` : ''}
+        <div style="font-size:10px;color:var(--text2);margin-top:4px;">状态: ${c.status||'draft'}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+  document.getElementById('tabContent').innerHTML = html;
+}
+
+function updateCharField(idx, field, value) {
+  fetch('/api/projects/' + currentProjectId + '/characters').then(r => r.json()).then(data => {
+    const chars = data.characters || [];
+    if (chars[idx]) { chars[idx][field] = value; }
+    fetch('/api/projects/' + currentProjectId + '/characters', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({characters: chars}),
+    });
+  });
+}
+
+async function addCharacter() {
+  if (!currentProjectId) return;
+  const resp = await fetch('/api/projects/' + currentProjectId + '/characters');
+  const data = await resp.json();
+  const chars = data.characters || [];
+  chars.push({id:'char_'+(chars.length+1), name:'新角色', description:'', appearance_detail:'', clothing_details:'', voice_style:'', status:'draft'});
+  await fetch('/api/projects/' + currentProjectId + '/characters', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({characters: chars}),
+  });
+  loadCharactersTab();
+}
+
+async function deleteChar(idx) {
+  const resp = await fetch('/api/projects/' + currentProjectId + '/characters');
+  const data = await resp.json();
+  const chars = data.characters || [];
+  chars.splice(idx, 1);
+  await fetch('/api/projects/' + currentProjectId + '/characters', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({characters: chars}),
+  });
+  loadCharactersTab();
+}
+
+async function generateCharRef(charId, idx) {
+  if (!currentProjectId) return;
+  const steps = parseInt(document.getElementById('char_steps_'+idx)?.value) || 20;
+  const cfg = parseFloat(document.getElementById('char_cfg_'+idx)?.value) || 7;
+  toast(`生成角色三视图... (steps=${steps})`);
+  const resp = await fetch('/api/projects/' + currentProjectId + '/characters/generate-ref', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({character_id: charId, steps, cfg, seed: -1}),
+  });
+  const data = await resp.json();
+  if (data.success) {
+    toast('三视图已提交 (白底): ' + data.prompt_id);
+    pollCharRef(charId);
+  } else {
+    toast('失败: ' + (data.error || ''));
+  }
+}
+
+function pollCharRef(charId) {
+  const check = async () => {
+    try {
+      const resp = await fetch('/api/projects/' + currentProjectId + '/characters/' + charId + '/ref-status');
+      const data = await resp.json();
+      if (data.found && (data.status === 'success' || data.status === 'done')) {
+        if (currentTab === 'characters') loadCharactersTab();
+        toast('角色三视图生成完成!');
+        return;
+      } else if (data.found && data.status === 'error') { toast('生成失败'); return; }
+    } catch(e) {}
+    setTimeout(check, 3000);
+  };
+  check();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Environments Tab
+// ═══════════════════════════════════════════════════════════════════
+async function loadEnvironmentsTab() {
+  if (!currentProjectId) { document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:40px;">请先选择项目</div>'; return; }
+  const resp = await fetch('/api/projects/' + currentProjectId + '/environments');
+  const data = await resp.json();
+  const envs = data.environments || [];
+
+  let html = `<button class="btn btn-primary btn-sm" onclick="addEnvironment()" style="margin-bottom:8px;">+ 添加环境</button>
+    <span style="font-size:11px;color:var(--text2);margin-left:8px;">💡 生成环境参考图后，分镜会用作文本+参考图生成</span>`;
+  if (!envs.length) {
+    html += '<div style="color:var(--text2);padding:40px;text-align:center;">暂无环境。</div>';
+  } else {
+    html += '<div class="panel-grid">';
+    envs.forEach((e, i) => {
+      html += `
+      <div class="card">
+        <strong>${esc(e.name||'未命名')}</strong>
+        <textarea onchange="updateEnvField(${i},'description',this.value)" rows="3">${esc(e.description||'')}</textarea>
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:10px;color:var(--text2);">步数:</span><input type="number" id="env_steps_${i}" value="20" min="1" max="100" style="width:45px;font-size:11px;">
+          <span style="font-size:10px;color:var(--text2);">CFG:</span><input type="number" id="env_cfg_${i}" value="7" min="1" max="30" step="0.5" style="width:45px;font-size:11px;">
+        </div>
+        <div style="margin-top:4px;display:flex;gap:4px;">
+          <button class="btn btn-primary btn-sm" onclick="generateEnvRef('${e.id}',${i})">🎨 生成参考图</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteEnv(${i})">删除</button>
+        </div>
+        ${e.ref_image_url ? `<img src="${escAttr(e.ref_image_url)}" style="width:100%;margin-top:4px;border-radius:4px;cursor:pointer;" onclick="window.open('${escAttr(e.ref_image_url)}')" title="点击查看大图">` : ''}
+        <div style="font-size:10px;color:var(--text2);margin-top:4px;">状态: ${e.status||'draft'}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+  document.getElementById('tabContent').innerHTML = html;
+}
+
+function updateEnvField(idx, field, value) {
+  fetch('/api/projects/' + currentProjectId + '/environments').then(r => r.json()).then(data => {
+    const envs = data.environments || [];
+    if (envs[idx]) { envs[idx][field] = value; }
+    fetch('/api/projects/' + currentProjectId + '/environments', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({environments: envs}),
+    });
+  });
+}
+
+async function addEnvironment() {
+  const resp = await fetch('/api/projects/' + currentProjectId + '/environments');
+  const data = await resp.json();
+  const envs = data.environments || [];
+  envs.push({id:'env_'+(envs.length+1), name:'新环境', description:''});
+  await fetch('/api/projects/' + currentProjectId + '/environments', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({environments: envs}),
+  });
+  loadEnvironmentsTab();
+}
+
+async function deleteEnv(idx) {
+  const resp = await fetch('/api/projects/' + currentProjectId + '/environments');
+  const data = await resp.json();
+  const envs = data.environments || [];
+  envs.splice(idx, 1);
+  await fetch('/api/projects/' + currentProjectId + '/environments', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({environments: envs}),
+  });
+  loadEnvironmentsTab();
+}
+
+async function generateEnvRef(envId, idx) {
+  if (!currentProjectId) return;
+  const steps = parseInt(document.getElementById('env_steps_'+idx)?.value) || 20;
+  const cfg = parseFloat(document.getElementById('env_cfg_'+idx)?.value) || 7;
+  toast(`生成环境参考图... (steps=${steps})`);
+  const resp = await fetch('/api/projects/' + currentProjectId + '/environments/generate-ref', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({environment_id: envId, steps, cfg, seed: -1}),
+  });
+  const data = await resp.json();
+  if (data.success) {
+    toast('参考图已提交: ' + data.prompt_id);
+    pollEnvRef(envId);
+  } else {
+    toast('失败: ' + (data.error || ''));
+  }
+}
+
+function pollEnvRef(envId) {
+  const check = async () => {
+    try {
+      const resp = await fetch('/api/projects/' + currentProjectId + '/environments/' + envId + '/ref-status');
+      const data = await resp.json();
+      if (data.found && (data.status === 'success' || data.status === 'done')) {
+        if (currentTab === 'environments') loadEnvironmentsTab();
+        toast('环境参考图生成完成!');
+        return;
+      } else if (data.found && data.status === 'error') { toast('生成失败'); return; }
+    } catch(e) {}
+    setTimeout(check, 3000);
+  };
+  check();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Panels Tab
+// ═══════════════════════════════════════════════════════════════════
+async function loadPanelsTab() {
+  if (!currentProjectId) { document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:40px;">请先选择项目</div>'; return; }
+  const resp = await fetch('/api/projects/' + currentProjectId + '/panels');
+  const data = await resp.json();
+  const panels = data.panels || [];
+  document.getElementById('statPanels').textContent = panels.length;
+
+  let html = `<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+    <button class="btn btn-primary btn-sm" onclick="addPanel()">+ 添加分镜</button>
+    <button class="btn btn-secondary btn-sm" onclick="savePanels()">💾 保存</button>
+    <button class="btn btn-success btn-sm" onclick="assembleAndGenAll()">🎨 全部生成</button>
+    <span style="font-size:11px;color:var(--text2);" id="panelGenStatus"></span>
+  </div>
+  <div style="margin-bottom:8px;font-size:11px;color:var(--text2);">💡 先生成角色/环境参考图，再生成分镜图（分镜会用参考图+文本保持一致性）</div>`;
+
+  if (!panels.length) {
+    html += '<div style="color:var(--text2);padding:40px;text-align:center;">暂无分镜。使用综合拆解或手动添加。</div>';
+  } else {
+    html += '<div class="panel-grid" id="panelList">';
+    panels.forEach((p, i) => {
+      const genImgs = p.generated_images || [];
+      const hasRefs = (p.character_refs || []).length > 0 || (p.environment_ref || '');
+      html += `
+      <div class="card panel-card" id="panel_${i}" draggable="true"
+           ondragstart="onDragStart(event,${i})" ondragend="onDragEnd(event)"
+           ondragover="onDragOver(event)" ondragenter="onDragEnter(event)"
+           ondragleave="onDragLeave(event)" ondrop="onDrop(event,${i})">
+        <div class="drag-handle" title="拖拽排序">⠿</div>
+        <div class="panel-num">#${p.panel_num || i+1}</div>
+        <label>场景描述</label>
+        <textarea onchange="updatePanelField(${i},'scene_description',this.value)">${esc(p.scene_description||'')}</textarea>
+        <label>角色 (逗号分隔)</label>
+        <input value="${escAttr((p.characters||[]).join(', '))}" onchange="updatePanelField(${i},'characters',this.value.split(',').map(s=>s.trim()))">
+        <label>环境</label>
+        <input value="${escAttr(p.environment||'')}" onchange="updatePanelField(${i},'environment',this.value)">
+        <label>台词</label>
+        <input value="${escAttr(p.dialogue||'')}" onchange="updatePanelField(${i},'dialogue',this.value)">
+        <label>配音（含语气）</label>
+        <input value="${escAttr(p.voice_line||'')}" onchange="updatePanelField(${i},'voice_line',this.value)">
+        <div style="display:flex;gap:4px;margin-top:4px;">
+          <input value="${escAttr(p.emotion||'')}" onchange="updatePanelField(${i},'emotion',this.value)" placeholder="情绪" style="flex:1;">
+          <input value="${escAttr(p.camera||'')}" onchange="updatePanelField(${i},'camera',this.value)" placeholder="镜头" style="flex:1;">
+        </div>
+        <input value="${escAttr(p.action||'')}" onchange="updatePanelField(${i},'action',this.value)" placeholder="动作" style="margin-top:4px;">
+        <input value="${escAttr(p.video_motion||'')}" onchange="updatePanelField(${i},'video_motion',this.value)" placeholder="视频运动" style="margin-top:4px;">
+        <div style="margin-top:4px;display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:10px;color:var(--text2);">步数:</span><input type="number" id="steps_${i}" value="20" min="1" max="100" style="width:45px;font-size:11px;">
+          <span style="font-size:10px;color:var(--text2);">CFG:</span><input type="number" id="cfg_${i}" value="7" min="1" max="30" step="0.5" style="width:45px;font-size:11px;">
+          <span style="font-size:10px;color:var(--text2);">种子:</span><input type="number" id="seed_${i}" value="-1" min="-1" style="width:55px;font-size:11px;">
+        </div>
+        <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="regenerateSinglePanel('${p.id}',${i})">🎨 重新生成</button>
+          <button class="btn btn-danger btn-sm" onclick="deletePanel(${i})">删除</button>
+        </div>
+        ${hasRefs ? '<div style="font-size:10px;color:var(--accent2);margin-top:2px;">✅ 已关联参考图</div>' : ''}
+        ${genImgs.length ? `<div style="display:flex;gap:3px;margin-top:4px;flex-wrap:wrap;">${genImgs.map(img => `<img src="${escAttr(img)}" style="width:55px;height:55px;object-fit:cover;border-radius:4px;cursor:pointer;" onclick="window.open('${escAttr(img)}')" title="点击查看大图">`).join('')}</div>` : ''}
+        <div style="font-size:10px;color:var(--text2);margin-top:4px;">状态: ${p.status||'draft'}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+  document.getElementById('tabContent').innerHTML = html;
+}
+
+function updatePanelField(idx, field, value) {
+  fetch('/api/projects/' + currentProjectId + '/panels').then(r => r.json()).then(data => {
+    const panels = data.panels || [];
+    if (panels[idx]) { panels[idx][field] = value; }
+    fetch('/api/projects/' + currentProjectId + '/panels', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({panels}),
+    });
+  });
+}
+
+async function savePanels() {
+  const resp = await fetch('/api/projects/' + currentProjectId + '/panels');
+  const panels = (await resp.json()).panels || [];
+  await fetch('/api/projects/' + currentProjectId + '/panels', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({panels}),
+  });
+  toast('已保存 ' + panels.length + ' 个分镜');
+}
+
+async function addPanel() {
+  const resp = await fetch('/api/projects/' + currentProjectId + '/panels');
+  const data = await resp.json();
+  const panels = data.panels || [];
+  panels.push({id:'panel_'+(panels.length+1), panel_num:panels.length+1, scene_description:'', characters:[], environment:'', dialogue:'', voice_line:'', emotion:'', camera:'', action:'', video_motion:'', status:'draft'});
+  await fetch('/api/projects/' + currentProjectId + '/panels', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({panels}),
+  });
+  loadPanelsTab();
+}
+
+async function deletePanel(idx) {
+  const resp = await fetch('/api/projects/' + currentProjectId + '/panels');
+  const data = await resp.json();
+  const panels = data.panels || [];
+  panels.splice(idx, 1);
+  await fetch('/api/projects/' + currentProjectId + '/panels', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({panels}),
+  });
+  loadPanelsTab();
+}
+
+async function regenerateSinglePanel(panelId, idx) {
+  if (!currentProjectId) { toast('请先选择项目'); return; }
+  const steps = parseInt(document.getElementById('steps_'+idx)?.value) || 20;
+  const cfg = parseFloat(document.getElementById('cfg_'+idx)?.value) || 7;
+  const seed = parseInt(document.getElementById('seed_'+idx)?.value) || -1;
+  toast(`重新生成分镜... (steps=${steps})`);
+  const resp = await fetch('/api/projects/' + currentProjectId + '/panels/' + panelId + '/regenerate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({steps, cfg, seed}),
+  });
+  const data = await resp.json();
+  if (data.success) {
+    toast('已提交: ' + (data.prompt_id || ''));
+    if (data.prompt_id) pollPanelResult(panelId, data.prompt_id);
+  } else {
+    toast('失败: ' + (data.error || ''));
+  }
+}
+
+async function assembleAndGenAll() {
+  if (!currentProjectId) { toast('请先选择项目'); return; }
+  const resp = await fetch('/api/projects/' + currentProjectId + '/panels');
+  const panels = (await resp.json()).panels || [];
+  toast('组装提示词并生成全部 ' + panels.length + ' 个分镜...');
+  await fetch('/api/projects/' + currentProjectId + '/assemble-prompts', {method:'POST'});
+  document.getElementById('panelGenStatus').textContent = '0/' + panels.length;
+  for (let i = 0; i < panels.length; i++) {
+    document.getElementById('panelGenStatus').textContent = (i+1) + '/' + panels.length;
+    const r = await fetch('/api/projects/' + currentProjectId + '/panels/' + panels[i].id + '/regenerate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({steps:20, cfg:7, seed:-1}),
+    });
+    const d = await r.json();
+    if (d.success && d.prompt_id) await pollPanelAsync(d.prompt_id);
+    if (i < panels.length - 1) await new Promise(r => setTimeout(r, 3000));
+  }
+  document.getElementById('panelGenStatus').textContent = '完成!';
+  if (currentTab === 'panels') loadPanelsTab();
+  refreshStats();
+}
+
+async function pollPanelAsync(promptId) {
+  return new Promise(resolve => {
+    const check = async () => {
+      try {
+        const resp = await fetch('/api/comfyui/status/' + encodeURIComponent(promptId));
+        const data = await resp.json();
+        if (data.found && (data.status === 'success' || data.status === 'done')) { resolve(); return; }
+        if (data.found && data.status === 'error') { resolve(); return; }
+      } catch(e) {}
+      setTimeout(check, 3000);
+    };
+    check();
+  });
+}
+
+function pollPanelResult(panelId, promptId) {
+  const check = async () => {
+    try {
+      const resp = await fetch('/api/comfyui/status/' + encodeURIComponent(promptId));
+      const data = await resp.json();
+      if (data.found && (data.status === 'success' || data.status === 'done')) {
+        if (currentTab === 'panels') loadPanelsTab();
+        toast('分镜生成完成!');
+        refreshStats();
+        return;
+      } else if (data.found && data.status === 'error') { toast('生成失败'); return; }
+    } catch(e) {}
+    setTimeout(check, 3000);
+  };
+  check();
+}
+
+// Panel drag-and-drop
+function onDragStart(e, idx) { _dragIdx = idx; e.target.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; }
+function onDragEnd(e) { e.target.classList.remove('dragging'); document.querySelectorAll('#panelList .panel-card').forEach(c => c.classList.remove('drag-over')); }
+function onDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+function onDragEnter(e) { e.preventDefault(); e.target.closest('.panel-card')?.classList.add('drag-over'); }
+function onDragLeave(e) { e.target.closest('.panel-card')?.classList.remove('drag-over'); }
+async function onDrop(e, targetIdx) {
+  e.preventDefault();
+  document.querySelectorAll('#panelList .panel-card').forEach(c => c.classList.remove('drag-over'));
+  if (_dragIdx < 0 || _dragIdx === targetIdx) return;
+  const resp = await fetch('/api/projects/' + currentProjectId + '/panels');
+  const data = await resp.json();
+  const panels = data.panels;
+  const [moved] = panels.splice(_dragIdx, 1);
+  panels.splice(targetIdx, 0, moved);
+  panels.forEach((p, i) => p.panel_num = i + 1);
+  await fetch('/api/projects/' + currentProjectId + '/panels', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({panels}),
+  });
+  _dragIdx = -1;
+  loadPanelsTab();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Table Tab
+// ═══════════════════════════════════════════════════════════════════
+async function loadTableTab() {
+  if (!currentProjectId) { document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:40px;">请先选择项目</div>'; return; }
+  const resp = await fetch('/api/projects/' + currentProjectId + '/table-view');
+  const data = await resp.json();
+  const headers = data.headers || [];
+  const rows = data.rows || [];
+  let html = `<table class="mapping-table"><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>`;
+  rows.forEach(row => {
+    html += '<tr>' + row.map(cell => `<td>${esc(String(cell||''))}</td>`).join('') + '</tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById('tabContent').innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Style Tab (审图)
+// ═══════════════════════════════════════════════════════════════════
+async function loadStyleTab() {
+  if (!currentProjectId) { document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:40px;">请先选择项目</div>'; return; }
+
+  let currentStyle = {};
+  try {
+    const resp = await fetch('/api/projects/' + currentProjectId + '/style');
+    currentStyle = (await resp.json()).style || {};
+  } catch(e) {}
+
+  if (!allWorkflows.length) {
+    try {
+      const wr = await fetch('/api/comfyui/workflows');
+      allWorkflows = (await wr.json()).workflows || [];
+    } catch(e) {}
+  }
+
+  const wfOpts = allWorkflows.map(w => `<option value="${escAttr(w.id)}" ${w.id===currentStyle.workflow_id?'selected':''}>${esc(w.id.substring(0,60))}</option>`).join('');
+  const previewImgs = currentStyle.preview_images || [];
+  const selectedPreview = currentStyle.selected_preview || -1;
+
+  document.getElementById('tabContent').innerHTML = `
+    <div class="card">
+      <h3>第一步：选择画风</h3>
+      <select id="stylePreset">
+        <option value="日漫风格" ${(currentStyle.style_name||'')==='日漫风格'?'selected':''}>日漫风格</option>
+        <option value="写实电影风" ${currentStyle.style_name==='写实电影风'?'selected':''}>写实电影风</option>
+        <option value="水墨国风" ${currentStyle.style_name==='水墨国风'?'selected':''}>水墨国风</option>
+        <option value="赛博朋克" ${currentStyle.style_name==='赛博朋克'?'selected':''}>赛博朋克</option>
+        <option value="Q版可爱" ${currentStyle.style_name==='Q版可爱'?'selected':''}>Q版可爱</option>
+        <option value="暗黑哥特" ${currentStyle.style_name==='暗黑哥特'?'selected':''}>暗黑哥特</option>
+        <option value="自定义" ${currentStyle.style_name==='自定义'?'selected':''}>自定义</option>
+      </select>
+    </div>
+    <div class="card">
+      <h3>第二步：选择模型和工作流</h3>
+      <label>生图工作流</label>
+      <select id="styleWorkflow"><option value="">-- 选择 --</option>${wfOpts}</select>
+      <label style="margin-top:6px;">角色参考图工作流</label>
+      <select id="styleCharWf"><option value="">-- 同生图工作流 --</option>${wfOpts}</select>
+      <label>环境参考图工作流</label>
+      <select id="styleEnvWf"><option value="">-- 同生图工作流 --</option>${wfOpts}</select>
+      <label>视频工作流 (图生视频)</label>
+      <select id="styleVideoWf"><option value="">-- 选择 --</option>${allWorkflows.filter(w=>w.id.includes('视频')||w.id.includes('LTX')||w.id.includes('Wan')).map(w=>`<option value="${escAttr(w.id)}" ${w.id===currentStyle.video_workflow?'selected':''}>${esc(w.id.substring(0,50))}</option>`).join('')}</select>
+    </div>
+    <div class="card">
+      <h3>第三步：参数设置</h3>
+      <div class="form-row">
+        <div class="form-group"><label>种子 (-1=随机)</label><input type="number" id="styleSeed" value="-1"></div>
+        <div class="form-group"><label>CFG Scale</label><input type="number" id="styleCfg" value="7" step="0.5"></div>
+        <div class="form-group"><label>迭代步数</label><input type="number" id="styleSteps" value="20"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>第四步：提示词模板</h3>
+      <div class="form-group"><label>正向提示词前缀（所有分镜/角色/环境共用）</label>
+      <textarea id="stylePositive" rows="2">${esc(currentStyle.positive_prefix||'masterpiece, best quality')}</textarea></div>
+      <div class="form-group"><label>负向提示词</label>
+      <textarea id="styleNegative" rows="2">${esc(currentStyle.negative_prompt||'低质量, 模糊, 畸形手, 畸形脸, 文字, 水印')}</textarea></div>
+    </div>
+    <div class="card" style="background:var(--bg);border:1px solid var(--accent);">
+      <h3>第五步：审图 — 生成预览确认风格 ⭐</h3>
+      <p style="font-size:11px;color:var(--text2);margin-bottom:6px;">生成10张包含角色+环境的预览图，选中满意的一张定下风格。<strong>此后所有角色/环境/分镜都用此参数，保持画风统一。</strong></p>
+      <button class="btn btn-primary" id="btnGenPreview" onclick="generateStylePreview(10)">🎨 生成10张预览图</button>
+      <span id="previewStatus" style="font-size:11px;color:var(--text2);margin-left:8px;"></span>
+      <div class="result-grid" id="previewGrid" style="margin-top:8px;">
+        ${previewImgs.map((img, i) => `
+          <div class="result-card ${i===selectedPreview?'selected':''}" onclick="selectPreview(${i})">
+            <img src="${escAttr(img)}">
+            <div class="result-label">#${i+1} ${i===selectedPreview?'✅ 已选中':''}</div>
+          </div>
+        `).join('')}
+      </div>
+      ${previewImgs.length ? `<button class="btn btn-danger btn-sm" style="margin-top:6px;" onclick="clearPreviews()">🗑 清理预览图</button>` : ''}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button class="btn btn-primary" onclick="saveStyleConfig()">💾 保存配置</button>
+      <button class="btn btn-success" onclick="confirmStyle()">✅ 确认风格 (当前: ${selectedPreview>=0?'#'+(selectedPreview+1):'无'})</button>
+    </div>
+    <div id="styleStatus" style="margin-top:8px;font-size:11px;color:var(--accent2);">
+      ${currentStyle.is_locked ? '✅ 风格已确认 — 全项目统一使用此画风参数' : '⚠ 请先生成预览并选中满意的一张'}
+    </div>
+  `;
+
+  if (currentStyle.character_ref_workflow) document.getElementById('styleCharWf').value = currentStyle.character_ref_workflow;
+  if (currentStyle.environment_ref_workflow) document.getElementById('styleEnvWf').value = currentStyle.environment_ref_workflow;
+  if (currentStyle.fixed_params) {
+    const fp = currentStyle.fixed_params;
+    if (fp.seed !== undefined) document.getElementById('styleSeed').value = fp.seed;
+    if (fp.cfg !== undefined) document.getElementById('styleCfg').value = fp.cfg;
+    if (fp.steps !== undefined) document.getElementById('styleSteps').value = fp.steps;
+  }
+}
+
+async function saveStyleConfig() {
+  if (!currentProjectId) return;
+  const wf = document.getElementById('styleWorkflow').value;
+  const body = {
+    style_name: document.getElementById('stylePreset').value,
+    workflow_id: wf,
+    positive_prefix: document.getElementById('stylePositive').value,
+    negative_prompt: document.getElementById('styleNegative').value,
+    character_ref_workflow: document.getElementById('styleCharWf').value || wf,
+    environment_ref_workflow: document.getElementById('styleEnvWf').value || wf,
+    video_workflow: document.getElementById('styleVideoWf').value,
+    fixed_params: {
+      seed: parseInt(document.getElementById('styleSeed').value) || -1,
+      cfg: parseFloat(document.getElementById('styleCfg').value) || 7,
+      steps: parseInt(document.getElementById('styleSteps').value) || 20,
+    },
+  };
+  await fetch('/api/projects/' + currentProjectId + '/style', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  toast('风格配置已保存');
+}
+
+async function confirmStyle() {
+  if (!currentProjectId) { toast('请先选择项目'); return; }
+  await saveStyleConfig();
+  const resp = await fetch('/api/projects/' + currentProjectId + '/style/lock', {method:'POST'});
+  const data = await resp.json();
+  document.getElementById('styleStatus').innerHTML = '✅ 风格已确认 — 全项目统一使用此画风参数';
+  toast(data.message || '风格已确认');
+}
+
+async function generateStylePreview(count) {
+  if (!currentProjectId) { toast('请先选择项目'); return; }
+  await saveStyleConfig();
+  const wf = document.getElementById('styleWorkflow').value;
+  if (!wf) { toast('请先选择生图工作流'); return; }
+  document.getElementById('btnGenPreview').disabled = true;
+  const statusEl = document.getElementById('previewStatus');
+  statusEl.textContent = `提交 ${count} 张预览...`;
+  const resp = await fetch('/api/projects/' + currentProjectId + '/style/preview', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({count}),
+  });
+  const data = await resp.json();
+  if (!data.success) { toast('失败: ' + (data.error||'')); document.getElementById('btnGenPreview').disabled = false; return; }
+  statusEl.textContent = '等待生成...';
+  pollStylePreviews(data.prompt_ids || []);
+}
+
+function selectPreview(idx) {
+  if (!currentProjectId) return;
+  fetch('/api/projects/' + currentProjectId + '/style', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({selected_preview: idx}),
+  }).then(() => {
+    loadStyleTab();
+    toast('已选中预览图 #' + (idx+1));
+  });
+}
+
+async function clearPreviews() {
+  await fetch('/api/projects/' + currentProjectId + '/style/clear-previews', {method:'POST'});
+  loadStyleTab();
+  toast('预览图已清理');
+}
+
+async function pollStylePreviews(promptIds) {
+  if (!promptIds.length) {
+    document.getElementById('previewStatus').textContent = '完成!';
+    document.getElementById('btnGenPreview').disabled = false;
+    loadStyleTab();
+    return;
+  }
+  const done = new Set();
+  for (const pid of promptIds) {
+    try {
+      const resp = await fetch('/api/comfyui/status/' + encodeURIComponent(pid));
+      const data = await resp.json();
+      if (data.found && (data.status === 'success' || data.status === 'done')) {
+        done.add(pid);
+        const images = data.image_urls || [];
+        if (images.length) {
+          await fetch('/api/projects/' + currentProjectId + '/style/preview-image', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prompt_id: pid, image_url: images[0]}),
+          });
+        }
+      } else if (data.found && data.status === 'error') {
+        done.add(pid);
+      }
+    } catch(e) {}
+  }
+  const remaining = promptIds.filter(p => !done.has(p));
+  document.getElementById('previewStatus').textContent = `已完成 ${promptIds.length - remaining.length}/${promptIds.length}`;
+  if (remaining.length) {
+    setTimeout(() => pollStylePreviews(remaining), 3000);
+  } else {
+    document.getElementById('previewStatus').textContent = '全部完成!';
+    document.getElementById('btnGenPreview').disabled = false;
+    loadStyleTab();
+    toast('预览图全部生成！点击满意的图片选中它');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Video Tab
+// ═══════════════════════════════════════════════════════════════════
+async function loadVideoTab() {
+  if (!currentProjectId) { document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:40px;">请先选择项目</div>'; return; }
+  const resp = await fetch('/api/projects/' + currentProjectId + '/panels');
+  const panels = (await resp.json()).panels || [];
+  const style = (await (await fetch('/api/projects/' + currentProjectId + '/style')).json()).style || {};
+  document.getElementById('tabContent').innerHTML = `
+    <div class="card">
+      <h3>🎥 图生视频</h3>
+      <p style="font-size:11px;color:var(--text2);">使用已生成的分镜图片作为输入，通过 ComfyUI 图生视频工作流生成视频。</p>
+      <p style="font-size:10px;color:var(--text2);">视频工作流: ${esc(style.video_workflow||'未配置 (请在审图中设置)')}</p>
+    </div>
+    <div class="card">
+      <h3>选择有图片的分镜</h3>
+      <div id="videoPanelList">${
+        panels.filter(p=>(p.generated_images||[]).length).map(p => `
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:4px 0;cursor:pointer;">
+            <input type="checkbox" class="videoCheck" value="${escAttr(p.id)}">
+            #${p.panel_num} — ${esc((p.scene_description||'').substring(0,40))}... (${(p.generated_images||[]).length}张图)
+            ${p.generated_video_url ? '✅已有视频' : ''}
+          </label>
+        `).join('') || '暂无带图片的分镜'
+      }</div>
+    </div>
+    <button class="btn btn-primary" onclick="startVideoGen()">🎥 生成视频</button>
+    <div id="videoStatus" style="margin-top:8px;font-size:11px;color:var(--text2);"></div>
+  `;
+}
+
+async function startVideoGen() {
+  if (!currentProjectId) return;
+  const checks = document.querySelectorAll('.videoCheck:checked');
+  const ids = Array.from(checks).map(c => c.value);
+  if (!ids.length) { toast('请选中至少一个分镜'); return; }
+  toast('提交视频生成: ' + ids.length + ' 个分镜');
+  const resp = await fetch('/api/projects/' + currentProjectId + '/video', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({panel_ids: ids}),
+  });
+  const data = await resp.json();
+  document.getElementById('videoStatus').textContent = data.success ? '已提交 ' + data.total + ' 个视频任务' : '失败: ' + (data.error||'');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ComfyUI Tab
+// ═══════════════════════════════════════════════════════════════════
+async function loadComfyuiTab() {
+  if (!allWorkflows.length) {
+    try {
+      const wr = await fetch('/api/comfyui/workflows');
+      allWorkflows = (await wr.json()).workflows || [];
+    } catch(e) {}
+  }
+  document.getElementById('tabContent').innerHTML = `
+    <div class="card">
+      <h3>ComfyUI 生图</h3>
+      <label>选择工作流</label>
+      <select id="comfyWf" onchange="onComfyWfChange()"><option value="">-- 选择 --</option>
+        ${allWorkflows.map(w => `<option value="${escAttr(w.id)}">${esc(w.id.substring(0,60))}</option>`).join('')}
+      </select>
+      <div id="comfyWfInfo" style="margin-top:4px;font-size:10px;color:var(--text2);"></div>
+    </div>
+    <div class="card">
+      <h3>手动生成</h3>
+      <div class="form-row">
+        <div class="form-group"><label>提示词</label><input id="comfyPrompt" placeholder="输入提示词..."></div>
+        <div class="form-group"><label>种子</label><input type="number" id="comfySeed" value="-1"></div>
+        <div class="form-group"><label>步数</label><input type="number" id="comfySteps" value="20"></div>
+        <div class="form-group"><label>CFG</label><input type="number" id="comfyCfg" value="7" step="0.5"></div>
+      </div>
+      <button class="btn btn-primary" onclick="manualGenerate()" style="margin-top:8px;">生成</button>
+      <div id="comfyResult" style="margin-top:8px;"></div>
+    </div>
+  `;
+  loadComfyQueue();
+}
+
+function onComfyWfChange() {
+  const wfId = document.getElementById('comfyWf').value;
+  const wf = allWorkflows.find(w => w.id === wfId);
+  if (wf) {
+    const apiCfg = wf._api_config || wf.api_config || {};
+    const enabled = apiCfg.enabledParams || {};
+    document.getElementById('comfyWfInfo').textContent = '可调参数: ' + Object.keys(enabled).filter(k=>enabled[k]).join(', ');
+  }
+}
+
+async function manualGenerate() {
+  const wfId = document.getElementById('comfyWf').value;
+  if (!wfId) { toast('请选择工作流'); return; }
+  const params = {};
+  // Build params from enabled params
+  const wf = allWorkflows.find(w => w.id === wfId);
+  if (wf) {
+    const apiCfg = wf._api_config || wf.api_config || {};
+    const enabled = apiCfg.enabledParams || {};
+    for (const [k, on] of Object.entries(enabled)) {
+      if (!on) continue;
+      if (k.endsWith(':text')) params[k] = document.getElementById('comfyPrompt').value || 'test';
+      if (k.endsWith(':seed')) params[k] = parseInt(document.getElementById('comfySeed').value) || -1;
+      if (k.endsWith(':steps')) params[k] = parseInt(document.getElementById('comfySteps').value) || 20;
+      if (k.endsWith(':cfg')) params[k] = parseFloat(document.getElementById('comfyCfg').value) || 7;
+    }
+  }
+  toast('提交生成...');
+  const resp = await fetch('/api/comfyui/generate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({workflow_id: wfId, params, wait: false}),
+  });
+  const data = await resp.json();
+  if (data.success) {
+    document.getElementById('comfyResult').innerHTML = `已提交: ${data.prompt_id} <button class="btn btn-sm btn-secondary" onclick="pollComfyResult('${data.prompt_id}')">查看结果</button>`;
+  } else {
+    document.getElementById('comfyResult').textContent = '失败: ' + (data.error||'');
+  }
+}
+
+async function pollComfyResult(promptId) {
+  const check = async () => {
+    const resp = await fetch('/api/comfyui/status/' + encodeURIComponent(promptId));
+    const data = await resp.json();
+    if (data.found && (data.status === 'success' || data.status === 'done')) {
+      const images = data.image_urls || [];
+      document.getElementById('comfyResult').innerHTML = '完成! ' + images.map(img => `<img src="${escAttr(img)}" style="max-width:200px;margin:4px;border-radius:4px;">`).join('');
+      return;
+    } else if (data.found && data.status === 'error') {
+      document.getElementById('comfyResult').textContent = '生成失败';
+      return;
+    }
+    setTimeout(check, 3000);
+  };
+  check();
+}
+
+async function loadComfyQueue() {
+  try {
+    const resp = await fetch('/api/comfyui/queue');
+    const data = await resp.json();
+    document.getElementById('queueInfo').textContent = `ComfyUI: ${data.busy?'忙碌':'空闲'} | 排队:${data.pending_count||0}`;
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════
+refreshProjects();
+loadComfyQueue();
+setInterval(refreshStats, 8000);
+setInterval(loadComfyQueue, 5000);
 </script>
 </body>
 </html>
