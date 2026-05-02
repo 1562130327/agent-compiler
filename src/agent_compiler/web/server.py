@@ -6,10 +6,11 @@ import asyncio
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent_compiler.core.agent import Agent
@@ -28,22 +29,13 @@ _agent: Agent | None = None
 def get_agent() -> Agent:
     global _agent
     if _agent is None:
-        config = _load_config()
-        _agent = Agent(config)
+        _agent = Agent()
+        print(f"[启动] Agent 初始化完成, provider={_agent.llm.provider}, model={_agent.llm.model}")
     return _agent
 
 
-def _load_config() -> AgentConfig | None:
-    """Try loading config.yaml from common locations."""
-    for d in [Path.cwd(), Path.home() / ".agent-compiler",
-              Path.home() / ".config" / "agent-compiler"]:
-        p = d / "config.yaml"
-        if p.exists():
-            return AgentConfig.from_yaml(str(p))
-    return AgentConfig.from_env()
-
-
 # ── Routes ──────────────────────────────────────────────────────────
+
 
 @app_web.get("/", response_class=HTMLResponse)
 async def index():
@@ -57,16 +49,30 @@ async def index():
 @app_web.post("/api/chat")
 async def chat(request: Request):
     """Chat endpoint — sends user message to agent, returns response."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception as exc:
+        print(f"[ERROR] JSON 解析失败: {exc}")
+        return JSONResponse({"error": f"请求格式错误: {exc}"}, status_code=400)
+
     user_input = body.get("message", "").strip()
     session_id = body.get("session_id")
     if not user_input:
         return {"error": "empty message"}
 
+    print(f"[API] 收到消息: '{user_input[:60]}...' (session={session_id})")
+
     agent = get_agent()
     t0 = time.perf_counter()
-    result = agent.process(user_input, session_id=session_id)
+    try:
+        result = agent.process(user_input, session_id=session_id)
+    except Exception as exc:
+        traceback.print_exc()
+        print(f"[ERROR] agent.process 异常: {exc}")
+        return JSONResponse({"error": f"处理请求时出错: {exc}"}, status_code=500)
+
     elapsed = (time.perf_counter() - t0) * 1000
+    print(f"[API] 响应完成: source={result.source}, latency={elapsed:.1f}ms, tokens={result.tokens}")
 
     return {
         "text": result.text or "",
@@ -74,14 +80,20 @@ async def chat(request: Request):
         "latency_ms": round(elapsed, 1),
         "tokens": result.tokens or {},
         "session_id": session_id,
-        "tot_used": getattr(result, 'tot_used', False),
+        "tot_used": getattr(result, "tot_used", False),
     }
 
 
 @app_web.post("/api/chat/stream")
 async def chat_stream(request: Request):
     """Streaming chat — sends SSE events as agent processes."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return StreamingResponse(
+            _sse_event({"error": "请求格式错误"}),
+            media_type="text/event-stream",
+        )
     user_input = body.get("message", "").strip()
     if not user_input:
         return StreamingResponse(
@@ -92,7 +104,11 @@ async def chat_stream(request: Request):
     async def generate():
         agent = get_agent()
         yield _sse_event({"type": "status", "text": "thinking..."})
-        result = agent.process(user_input)
+        try:
+            result = agent.process(user_input)
+        except Exception as exc:
+            yield _sse_event({"type": "error", "text": str(exc)})
+            return
         yield _sse_event({
             "type": "done",
             "text": result.text or "",

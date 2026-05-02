@@ -216,16 +216,7 @@ class Agent:
         session = self._sessions.get_or_create(session_id)
         session.add_message("user", user_input)
 
-        # ── IF: Cache check ──
-        result = self.cache.match(user_input, ToolRegistry.execute)
-        if result is not None:
-            self._metrics["cache"] += 1
-            result.text = self._format_cache_text(result)
-            result.source = "cache"
-            session.add_message("assistant", result.text)
-            return result
-
-        # ── ELSE: LLM ReAct loop (or Plan+Execute for complex tasks) ──
+        # ── LLM ReAct loop (or Plan+Execute for complex tasks) ──
 
         # Detect if this is a multi-step task that benefits from planning
         plan_keywords = ["首先", "然后", "接着", "最后", "步骤", "逐步",

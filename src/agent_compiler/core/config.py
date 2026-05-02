@@ -11,7 +11,7 @@ from typing import Any
 @dataclass
 class LLMConfig:
     """LLM provider configuration."""
-    provider: str = "mock"        # mock | claude | openai | openai_compat
+    provider: str = "openai_compat"   # claude | openai | openai_compat
     api_key: str = ""
     api_base: str = ""
     model: str = ""
@@ -60,7 +60,7 @@ class AgentConfig:
         """Build config from environment variables, with optional overrides."""
         llm = LLMConfig(
             provider=overrides.pop("llm_provider", None)
-                     or os.environ.get("LLM_PROVIDER", "mock"),
+                     or os.environ.get("LLM_PROVIDER", "openai_compat"),
             api_key=overrides.pop("llm_api_key", None)
                     or os.environ.get("LLM_API_KEY", ""),
             api_base=overrides.pop("llm_api_base", None)

@@ -20,97 +20,20 @@ import time
 
 # ── System prompt ───────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are Agent Compiler, a powerful AI assistant with real system and programming tools.
+SYSTEM_PROMPT = """You are Agent Compiler, a helpful AI assistant. Reply in the user's language. Be concise.
 
-## Core workflow
-1. **Plan first**: understand the request, then decide the best approach
-2. **Read before editing**: always read files before modifying them
-3. **Execute**: use tools to accomplish the task
-4. **Verify**: check results and self-critique before responding
-
-## Self-check before responding
-- Did I fully address the user's request?
-- Are there any errors or omissions?
-- Is the response specific and actionable, not vague?
-- If code was changed, did I verify correctness?
-
-## Tools
-- **Shell**: execute_shell — run terminal commands (dangerous commands blocked)
-- **Files**: read_file, write_file, edit_file, glob_files, search_files, list_directory
-- **Programming**: execute_python, install_package, run_tests
-- **Git**: git_status, git_diff, git_log
-- **Web**: web_fetch, web_search
-- **System**: get_system_status, get_disk_usage, get_current_time, list_processes, search_logs
-- **Reports**: generate_report
-
-## Programming best practices
-1. glob_files → find relevant files by pattern
-2. read_file → understand existing code before touching it
-3. search_files → find references and patterns
-4. edit_file → precise text replacements (prefer over write_file for small edits)
-5. write_file → create new files or complete rewrites only
-6. execute_shell → run build/lint commands
-7. run_tests → verify changes work correctly
-8. git_diff → review all changes
-
-## Rules
-- Reply in the same language the user uses
-- Be conversational for casual chat; be thorough for technical tasks
-- Report tool results clearly, never make up output
-- Edit existing files rather than creating new ones when possible
-- For file edits: read first, understand, then change — never guess"""
+When using tools: read files before editing, verify results, report tool output accurately.
+For coding: plan first, edit existing files rather than create new ones, run tests after changes."""
 
 
 
-# ── Mock responses for demo ─────────────────────────────────────────
 
-_MOCK_RESPONSES = [
-    {
-        "intent": "search logs and generate report",
-        "steps": [
-            {"tool_name": "search_logs", "params": {"pattern": "ERROR|CRITICAL", "days": 1, "level": "ERROR"},
-             "description": "Search recent error logs"},
-            {"tool_name": "generate_report", "params": {"format": "markdown", "title": "Error Log Report", "include_timeline": True},
-             "description": "Generate summary report"},
-        ],
-    },
-    {
-        "intent": "analyze disk space",
-        "steps": [
-            {"tool_name": "get_disk_usage", "params": {},
-             "description": "Get disk space overview"},
-            {"tool_name": "find_large_files", "params": {"top_n": 10, "path": "/var/log"},
-             "description": "Find largest files"},
-            {"tool_name": "generate_report", "params": {"format": "text", "title": "Disk Analysis"},
-             "description": "Generate disk analysis report"},
-        ],
-    },
-    {
-        "intent": "check system status",
-        "steps": [
-            {"tool_name": "get_system_status", "params": {"format": "detailed"},
-             "description": "Get detailed system status"},
-        ],
-    },
-    {
-        "intent": "search logs by keyword",
-        "steps": [
-            {"tool_name": "search_logs", "params": {"pattern": "${pattern}", "days": 7, "level": "INFO"},
-             "description": "Search logs for keyword"},
-            {"tool_name": "generate_report", "params": {"format": "markdown", "title": "Log Search Results"},
-             "description": "Generate search results report"},
-        ],
-    },
-]
 
 
 class LLMProvider:
     """Primary reasoning engine with ReAct loop.
 
     Usage:
-        # Mock mode (no API needed)
-        llm = LLMProvider()
-
         # Claude API
         llm = LLMProvider(provider="claude", api_key="sk-ant-...")
 
@@ -146,6 +69,23 @@ class LLMProvider:
     def is_mock(self) -> bool:
         return self.provider == "mock"
 
+    @staticmethod
+    def _is_chat_query(user_input: str) -> bool:
+        """Check if this is a simple conversation, not a tool-using task."""
+        task_patterns = [
+            "查看", "搜索", "查找", "列出", "读取", "读取文件",
+            "写", "写入", "创建文件", "编辑", "修改",
+            "执行", "运行", "安装", "测试", "部署",
+            "git", "commit", "push", "pull", "diff", "log",
+            "磁盘", "内存", "进程", "日志", "log",
+            "read", "write", "edit", "run", "execute", "install",
+            "search", "find", "list", "glob", "grep",
+            "状态", "status", "系统", "报告",
+            "http", "curl", "fetch", "下载",
+        ]
+        inp = user_input.lower()
+        return not any(p in inp for p in task_patterns)
+
     @property
     def config_summary(self) -> dict:
         masked = self.api_key[:8] + "..." + self.api_key[-4:] if len(self.api_key) > 12 else "***"
@@ -165,8 +105,14 @@ class LLMProvider:
         context:  list of {"role": "...", "content": "..."} dicts
         tool_defs: list of {"name", "description", "params_schema"} dicts
         """
+        # For simple chat questions, skip tools entirely — saves 5000+ tokens
+        if self._is_chat_query(user_input):
+            tool_defs = []
+
         t0 = time.perf_counter()
         messages = list(context) + [{"role": "user", "content": user_input}]
+        msg_chars = sum(len(str(m.get("content", ""))) for m in messages)
+        print(f"[LLM] react: {len(messages)} 消息, {msg_chars} 字符, tools={len(tool_defs)}, is_chat={self._is_chat_query(user_input)}")
         all_tool_calls: list[dict] = []
         final_text = ""
         final_intent = user_input
@@ -174,7 +120,7 @@ class LLMProvider:
 
         for turn in range(self.max_turns):
             if self.provider == "mock":
-                response = self._mock_react_turn(user_input, messages, tool_defs, turn)
+                raise RuntimeError("Mock 模式已禁用。请配置真实的 LLM API（参见 config.yaml）")
             elif self.provider == "claude":
                 response = self._claude_turn(messages, tool_defs)
             elif self.provider in ("openai", "openai_compat"):
@@ -356,63 +302,6 @@ Do NOT wrap in markdown. Output ONLY valid JSON."""
             return self._try_parse_json(text) or []
         return []
 
-    def _mock_extract_memories(self, user_input: str, assistant_reply: str) -> list[dict]:
-        """Heuristic memory extraction for mock mode."""
-        import re
-        from agent_compiler.core.memory import _extract_chinese_keywords
-        facts = []
-        inp = user_input.strip()
-
-        # Name patterns
-        for m in re.findall(r'(?:我叫|我是|我的名字是)\s*(.{2,20}?)(?:[，,。！\s]|$)', inp):
-            name = m.strip()
-            if name and len(name) >= 2:
-                facts.append({
-                    "category": "user_profile",
-                    "title": f"用户姓名: {name}",
-                    "content": f"用户名叫{name}",
-                    "keywords": ["名字", name, "用户"],
-                    "confidence": 0.9,
-                })
-
-        # Role/job patterns
-        for m in re.findall(r'(?:我是|我的职业是|我的工作是|一名|一个)\s*(.{2,30}?(?:工程师|开发者|设计师|经理|运维|学生|教师|医生))(?:[，,。！\s]|$)', inp):
-            role = m.strip()
-            if role:
-                facts.append({
-                    "category": "user_profile",
-                    "title": f"用户职业: {role}",
-                    "content": f"用户的职业/角色是{role}",
-                    "keywords": ["职业", "角色", role],
-                    "confidence": 0.85,
-                })
-
-        # Skill/tech patterns
-        for m in re.findall(r'(?:主要用|常用|擅长|用|使用)\s*(.{2,50}?(?:Python|Go|Java|Rust|C\+\+|JavaScript|TypeScript|Ruby|PHP|SQL|React|Vue|Docker|K8s|Linux)(?:[、和,及\s]*(?:Python|Go|Java|Rust|C\+\+|JavaScript|TypeScript|Ruby|PHP|SQL|React|Vue|Docker|K8s|Linux))*)', inp):
-            skills = m.strip()
-            if skills:
-                facts.append({
-                    "category": "user_profile",
-                    "title": f"技术栈: {skills[:50]}",
-                    "content": f"用户使用的技术: {skills}",
-                    "keywords": ["技术栈", "编程语言"] + re.split(r'[、,，\s]+', skills),
-                    "confidence": 0.8,
-                })
-
-        # Remember directives
-        for m in re.findall(r'(?:记住|别忘了)[：:]\s*(.{4,200}?)(?:[。！？\n]|$)', inp):
-            content = m.strip()
-            if len(content) > 3:
-                facts.append({
-                    "category": "knowledge",
-                    "title": content[:60],
-                    "content": content[:300],
-                    "keywords": _extract_chinese_keywords(content),
-                    "confidence": 0.9,
-                })
-
-        return facts
-
     # ── Reflexion: self-evaluation and revision ────────────────────────
 
     def _evaluate_output(self, user_input: str, output: str,
@@ -526,133 +415,6 @@ Do NOT wrap in markdown. Output ONLY valid JSON."""
             pass
 
         return None
-
-    # ── Mock ────────────────────────────────────────────────────────
-
-    def _mock_react_turn(self, user_input: str, messages: list[dict],
-                         tool_defs: list[dict], turn: int) -> dict:
-        """Mock ReAct: first turn returns tools + text, or just text."""
-        # Check if we already got tool results
-        has_tool_results = any(m["role"] == "tool_result" for m in messages)
-
-        if has_tool_results:
-            # Generate a text reply based on what happened
-            results_text = []
-            for m in messages:
-                if m["role"] == "tool_result":
-                    try:
-                        data = json.loads(m["content"])
-                        if isinstance(data, dict):
-                            status = "OK" if data.get("success") else f"FAIL: {data.get('error', 'unknown')}"
-                            results_text.append(f"  - {data.get('tool', '?')}: {status}")
-                    except Exception:
-                        pass
-            reply = "Here is what I found:\n" + "\n".join(results_text) if results_text else "All done!"
-            return {"intent": "results summary", "reply": reply, "tool_calls": []}
-
-        # First turn: determine intent
-        inp = user_input.lower()
-
-        # ── Determine mock response ──────────────────────────────
-        if any(w in inp for w in ("磁盘", "disk", "硬盘", "空间还剩", "空间够",
-                                   "内存", "c盘", "d盘", "e盘", "盘空间", "盘内存")):
-            resp = _MOCK_RESPONSES[1]  # disk analysis
-        elif any(w in inp for w in ("服务器状态", "系统状态", "运行状态", "server status")):
-            resp = _MOCK_RESPONSES[2]  # system status
-        elif any(w in inp for w in ("日志", "log", "错误", "error", "报错", "搜索",
-                                     "search", "查找", "timeout", "connection")):
-            resp = _MOCK_RESPONSES[3]  # log search
-        elif any(w in inp for w in ("几点", "时间", "日期", "今天几号")):
-            resp = _MOCK_RESPONSES[2]  # system status (covers time)
-        elif any(w in inp for w in ("文件列表", "列出文件", "目录", "大文件")):
-            resp = _MOCK_RESPONSES[1]  # disk + files
-        else:
-            # Conversational — no tools
-            return {
-                "intent": "chat reply",
-                "reply": self._chat_reply(user_input),
-                "tool_calls": [],
-            }
-
-        return {
-            "intent": resp["intent"],
-            "tool_calls": resp["steps"],
-            "reply": "",
-        }
-
-    @staticmethod
-    def _chat_reply(user_input: str) -> str:
-        """Generate a natural chat reply for non-task inputs."""
-        inp = user_input.lower()
-
-        def has(*words: str) -> bool:
-            return any(w in inp for w in words)
-
-        if has("你好", "hi", "hello", "嗨", "hey", "在吗"):
-            return ("你好！我是 Agent Compiler，一个智能任务执行引擎。\n\n"
-                    "我可以帮你：\n"
-                    "- 查看服务器状态、磁盘空间\n"
-                    "- 搜索和分析日志\n"
-                    "- 生成报告、查找文件\n"
-                    "- 查看当前时间\n\n"
-                    "直接告诉我你想做什么就行！")
-
-        if has("你是谁", "你是什么", "介绍", "功能", "做什么", "干嘛",
-               "会什么", "能做什么", "who are you", "what can you",
-               "你能帮我", "帮什么", "哪些", "有什么能力"):
-            return ("我是 **Agent Compiler**，一个智能任务执行引擎。\n\n"
-                    "**工作原理：**\n"
-                    "当你告诉我一个任务时，我会通过 LLM 分析意图，\n"
-                    "然后执行相应的工具来完成它。\n\n"
-                    "执行过的任务会被缓存，下次相似的问题就直接执行，\n"
-                    "不再调用 LLM，速度更快，还省 Token。\n\n"
-                    "试试这些：\n"
-                    "- 查看服务器状态\n"
-                    "- 帮我查错误日志\n"
-                    "- 磁盘空间还剩多少\n"
-                    "- 现在几点")
-
-        if has("谢谢", "感谢", "thanks", "thank", "thx"):
-            return "不客气！还有什么需要做的吗？"
-
-        if has("再见", "bye", "拜拜"):
-            return "再见！有问题随时找我。"
-
-        if has("回答", "问题", "能不能", "可以回答", "能否", "能回答", "可以问"):
-            return ("当然可以！你可以问我：\n\n"
-                    "- 查看服务器状态 — 获取系统运行信息\n"
-                    "- 帮我查错误日志 — 搜索最近的错误\n"
-                    "- 磁盘空间还剩多少 — 查看磁盘使用\n"
-                    "- 现在几点 — 获取当前时间\n"
-                    "- 列出文件 — 查看目录内容\n\n"
-                    "这些我都会直接执行对应的工具并返回结果。试试看？")
-
-        if has("怎么用", "怎么操作", "怎么说话", "使用方法", "how to use"):
-            return ("很简单，直接告诉我你想做什么就行。比如：\n\n"
-                    "  - 查看服务器状态 — 读取 CPU、内存、运行时间\n"
-                    "  - 帮我查错误日志 — 搜索并汇总错误\n"
-                    "  - 磁盘空间还剩多少 — 查看磁盘使用\n\n"
-                    "不需要记命令，正常说话就行。")
-
-        # Dynamic fallback — acknowledge the query instead of being dismissive
-        if len(user_input) > 30:
-            return (f"好的，我理解你想做的是：\"{user_input[:50]}{'...' if len(user_input) > 50 else ''}\"\n\n"
-                    f"目前 mock 模式下我内置了以下工具：\n"
-                    f"- 查看服务器状态\n"
-                    f"- 搜索和分析日志\n"
-                    f"- 查看磁盘空间\n"
-                    f"- 查找大文件\n"
-                    f"- 列出目录文件\n"
-                    f"- 查看当前时间\n\n"
-                    f"切换到真实 LLM 模式可以获得更智能的回复：\n"
-                    f"  agent-compiler   (不带 --provider mock)")
-        return ("收到！我目前运行在 mock 演示模式，内置了以下能力：\n\n"
-                "- 查看服务器状态\n"
-                "- 帮我查错误日志\n"
-                "- 磁盘空间还剩多少\n"
-                "- 现在几点\n"
-                "- 列出文件、查找大文件\n\n"
-                "试试这些，或者直接运行 `agent-compiler` 用真实 AI 模式！")
 
     # ── Claude API ──────────────────────────────────────────────────
 

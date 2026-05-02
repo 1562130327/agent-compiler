@@ -12,6 +12,8 @@ agent_cache/
 demo_cache/
 demo_test_cache*/
 config.yaml
+agent_memory/
+AgentCompiler.spec
 proxy_cache/
 
 # Virtual environments
