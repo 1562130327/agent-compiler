@@ -178,6 +178,8 @@ body {
       <button onclick="switchTab('style')">🎨 审图</button>
       <button onclick="switchTab('video')">🎥 视频</button>
       <button onclick="switchTab('comfyui')">⚡ ComfyUI</button>
+      <button onclick="switchTab('memory')">🧠 记忆</button>
+      <button onclick="switchTab('skills')">🔧 技能</button>
     </div>
     <div id="tabContent"><div style="text-align:center;color:var(--text2);padding:40px;">选择项目后开始</div></div>
   </div>
@@ -226,6 +228,8 @@ async function loadTabContent(name) {
     case 'style': await loadStyleTab(); break;
     case 'video': await loadVideoTab(); break;
     case 'comfyui': await loadComfyuiTab(); break;
+    case 'memory': await loadMemoryTab(); break;
+    case 'skills': await loadSkillsTab(); break;
   }
 }
 
@@ -397,18 +401,15 @@ function loadStoryTab() {
     return;
   }
   document.getElementById('tabContent').innerHTML = `
-    <div class="card">
+    <div class="card" style="border:1px solid var(--accent);">
       <h3>📖 故事编辑</h3>
-      <p style="font-size:11px;color:var(--text2);margin-bottom:8px;">在左侧聊天中发送故事梗概，Agent 会自动生成完整故事并导入到此处。也可以手动填写。</p>
-      <label>故事标题</label>
-      <input id="storyTitle" placeholder="故事标题">
-      <label>故事简介</label>
-      <textarea id="storySummary" rows="4" placeholder="故事简介..."></textarea>
-      <label>故事主题（逗号分隔）</label>
-      <input id="storyThemes" placeholder="主题1, 主题2">
-      <div style="margin-top:8px;display:flex;gap:8px;">
-        <button class="btn btn-primary" onclick="saveStory()">💾 保存故事</button>
-        <button class="btn btn-secondary" onclick="quickBreakdown()">🚀 从聊天内容拆解生成</button>
+      <p style="font-size:11px;color:var(--text2);margin-bottom:8px;">将完整故事内容粘贴到下方，点击拆解按钮自动生成角色/环境/分镜/配音/动作，并分别导入对应标签页。每个分镜会组装英文正/反向提示词用于 ComfyUI 生图。</p>
+      <label>故事内容（直接粘贴全文）</label>
+      <textarea id="storyContent" rows="12" placeholder="在此粘贴完整的漫画/影视故事内容...&#10;&#10;例如：&#10;在古老的江湖中，一位名叫凌风的少年剑客踏上了寻找失落秘籍的旅程。他在竹林深处遇见了一位神秘的蒙面女子，两人发生了一场激烈的对决..."></textarea>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-primary" onclick="storyBreakdown()">🔨 拆解生成角色/环境/分镜</button>
+        <span style="font-size:11px;color:var(--text2);">目标分镜数: <input id="targetPanels" value="8" style="width:50px;text-align:center;" type="number" min="1" max="30"></span>
+        <span style="font-size:11px;color:var(--text2);">目标角色数: <input id="targetChars" value="3" style="width:50px;text-align:center;" type="number" min="1" max="10"></span>
       </div>
     </div>
     <div id="storyPreview"></div>
@@ -442,39 +443,32 @@ async function loadStoryPreview() {
   } catch(e) {}
 }
 
-async function saveStory() {
-  if (!currentProjectId) return;
-  toast('故事已保存');
-  loadStoryPreview();
-}
-
-async function quickBreakdown() {
+async function storyBreakdown() {
   if (!currentProjectId) { toast('请先选择项目'); return; }
-  const inp = document.getElementById('chatInput');
-  const msg = inp.value.trim();
-  if (!msg) { toast('请先在聊天框输入故事梗概'); return; }
-  inp.value = '';
-  addChatMsg('user', msg);
-  addChatMsg('system', '正在拆解故事...');
+  const storyText = document.getElementById('storyContent').value.trim();
+  if (!storyText) { toast('请先在故事编辑区粘贴故事内容'); return; }
+  const targetPanels = parseInt(document.getElementById('targetPanels').value) || 8;
+  const targetChars = parseInt(document.getElementById('targetChars').value) || 3;
+
+  document.getElementById('tabContent').querySelector('.btn-primary').disabled = true;
+  toast('正在拆解故事...');
   try {
     const resp = await fetch('/api/story/comprehensive-breakdown', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({premise: msg, project_id: currentProjectId, target_characters: 3, target_panels: 8}),
+      body: JSON.stringify({premise: storyText, project_id: currentProjectId, target_characters: targetChars, target_panels: targetPanels}),
     });
     const data = await resp.json();
-    document.querySelectorAll('.chat-msg.system').forEach(el => {
-      if (el.textContent.includes('正在拆解')) el.remove();
-    });
+    document.getElementById('tabContent').querySelector('.btn-primary').disabled = false;
     if (data.success) {
-      addChatMsg('assistant', `**${data.story_title||'故事'}**\n${data.story_summary||''}\n已生成 ${(data.characters||[]).length} 角色、${(data.environments||[]).length} 环境、${(data.panels||[]).length} 分镜`);
+      toast(`拆解完成！${(data.characters||[]).length} 角色、${(data.environments||[]).length} 环境、${(data.panels||[]).length} 分镜已自动导入`);
       refreshStats();
       loadStoryPreview();
-      toast('拆解完成！请在角色/环境/分镜面板查看');
     } else {
-      addChatMsg('assistant', '拆解失败: ' + (data.error || ''));
+      toast('拆解失败: ' + (data.error || ''));
     }
   } catch(e) {
-    addChatMsg('assistant', '请求失败: ' + e.message);
+    document.getElementById('tabContent').querySelector('.btn-primary').disabled = false;
+    toast('请求失败: ' + e.message);
   }
 }
 
@@ -993,7 +987,9 @@ async function loadStyleTab() {
     </div>
     <div class="card" style="background:var(--bg);border:1px solid var(--accent);">
       <h3>第五步：审图 — 生成预览确认风格 ⭐</h3>
-      <p style="font-size:11px;color:var(--text2);margin-bottom:6px;">生成10张包含角色+环境的预览图，选中满意的一张定下风格。<strong>此后所有角色/环境/分镜都用此参数，保持画风统一。</strong></p>
+      <p style="font-size:11px;color:var(--text2);margin-bottom:4px;">固定预览提示词（与项目内容无关，仅用于查看画风效果）：</p>
+      <p style="font-size:12px;color:var(--accent);margin-bottom:8px;padding:4px 8px;background:var(--bg2);border-radius:4px;">🐱 "一只小猫在花盆旁边"</p>
+      <p style="font-size:11px;color:var(--text2);margin-bottom:6px;">生成10张预览图，选中满意的一张——此后<strong>所有角色/环境/分镜都用选中图的模型/LoRA/采样器参数</strong>，保持画风统一。</p>
       <button class="btn btn-primary" id="btnGenPreview" onclick="generateStylePreview(10)">🎨 生成10张预览图</button>
       <span id="previewStatus" style="font-size:11px;color:var(--text2);margin-left:8px;"></span>
       <div class="result-grid" id="previewGrid" style="margin-top:8px;">
@@ -1006,6 +1002,7 @@ async function loadStyleTab() {
       </div>
       ${previewImgs.length ? `<button class="btn btn-danger btn-sm" style="margin-top:6px;" onclick="clearPreviews()">🗑 清理预览图</button>` : ''}
     </div>
+    <div id="workflowParams" style="margin-top:8px;"></div>
     <div style="display:flex;gap:8px;margin-top:8px;">
       <button class="btn btn-primary" onclick="saveStyleConfig()">💾 保存配置</button>
       <button class="btn btn-success" onclick="confirmStyle()">✅ 确认风格 (当前: ${selectedPreview>=0?'#'+(selectedPreview+1):'无'})</button>
@@ -1023,6 +1020,8 @@ async function loadStyleTab() {
     if (fp.cfg !== undefined) document.getElementById('styleCfg').value = fp.cfg;
     if (fp.steps !== undefined) document.getElementById('styleSteps').value = fp.steps;
   }
+
+  loadWorkflowParams();
 }
 
 async function saveStyleConfig() {
@@ -1081,10 +1080,35 @@ function selectPreview(idx) {
   fetch('/api/projects/' + currentProjectId + '/style', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({selected_preview: idx}),
-  }).then(() => {
+  }).then(async () => {
+    toast('已选中预览图 #' + (idx+1) + ' — 正在获取模型/LoRA/采样器信息...');
+    await loadWorkflowParams();
     loadStyleTab();
-    toast('已选中预览图 #' + (idx+1));
   });
+}
+
+async function loadWorkflowParams() {
+  if (!currentProjectId) return;
+  try {
+    const resp = await fetch('/api/projects/' + currentProjectId + '/style/workflow-params');
+    const data = await resp.json();
+    if (!data.success) return;
+    const p = data.params;
+    let html = '<div class="card" style="border:1px solid var(--accent2);"><h4>🔍 当前工作流参数（将用于所有生图）</h4><table style="width:100%;font-size:11px;border-collapse:collapse;">';
+    const addRow = (label, value) => { html += `<tr><td style="color:var(--text2);padding:2px 8px;">${label}</td><td style="padding:2px 8px;">${esc(String(value||'—'))}</td></tr>`; };
+    if (p.checkpoints && p.checkpoints.length) addRow('底模 (Checkpoint)', p.checkpoints.join(', '));
+    if (p.loras && p.loras.length) p.loras.forEach((l,i) => addRow(`LoRA #${i+1}`, (l.name||'?') + ' (强度:' + (l.strength||'?') + ')'));
+    addRow('采样器 (Sampler)', p.sampler);
+    addRow('调度器 (Scheduler)', p.scheduler);
+    addRow('步数 (Steps)', p.steps);
+    addRow('CFG Scale', p.cfg);
+    addRow('分辨率', p.resolution);
+    addRow('正向提示词节点', p.positive_prompt);
+    addRow('负向提示词节点', p.negative_prompt);
+    html += '</table></div>';
+    const el = document.getElementById('workflowParams');
+    if (el) el.innerHTML = html;
+  } catch(e) {}
 }
 
 async function clearPreviews() {
@@ -1273,6 +1297,82 @@ async function loadComfyQueue() {
     const data = await resp.json();
     document.getElementById('queueInfo').textContent = `ComfyUI: ${data.busy?'忙碌':'空闲'} | 排队:${data.pending_count||0}`;
   } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Memory Tab
+// ═══════════════════════════════════════════════════════════════════
+async function loadMemoryTab() {
+  document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:20px;">加载中...</div>';
+  try {
+    const resp = await fetch('/api/memory/list');
+    const data = await resp.json();
+    const memories = data.memories || [];
+    let html = `<div class="card"><h3>🧠 Agent 记忆管理</h3><p style="font-size:11px;color:var(--text2);">共 ${memories.length} 条记忆。点击删除可移除不需要的记忆。</p></div>`;
+    if (!memories.length) {
+      html += '<div style="text-align:center;color:var(--text2);padding:20px;">暂无记忆</div>';
+    }
+    for (const m of memories) {
+      html += `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:12px;color:var(--accent);">[${esc(m.tier||'')}] ${esc(m.title||'无标题')} <span style="color:var(--text2);">(${esc(m.category||'')})</span></span>
+          <button class="btn btn-danger btn-sm" onclick="deleteMemory('${escAttr(m.id)}')">🗑 删除</button>
+        </div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px;white-space:pre-wrap;">${esc((m.content||'').substring(0, 500))}</div>
+        <div style="font-size:10px;color:var(--text2);margin-top:2px;">ID: ${esc(m.id)}</div>
+      </div>`;
+    }
+    document.getElementById('tabContent').innerHTML = html;
+  } catch(e) {
+    document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--err);padding:20px;">加载失败: ' + e.message + '</div>';
+  }
+}
+
+async function deleteMemory(memoryId) {
+  if (!confirm('确定删除此记忆？')) return;
+  const resp = await fetch('/api/memory/' + encodeURIComponent(memoryId), {method:'DELETE'});
+  const data = await resp.json();
+  if (data.success) { toast('已删除'); loadMemoryTab(); }
+  else { toast('删除失败: ' + (data.error||'')); }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Skills Tab
+// ═══════════════════════════════════════════════════════════════════
+async function loadSkillsTab() {
+  document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--text2);padding:20px;">加载中...</div>';
+  try {
+    const resp = await fetch('/api/skills');
+    const data = await resp.json();
+    const skills = data.skills || [];
+    let html = `<div class="card"><h3>🔧 技能管理</h3><p style="font-size:11px;color:var(--text2);">共 ${skills.length} 个技能模板。自动从成功流程生成，下次遇到类似请求自动触发。</p></div>`;
+    if (!skills.length) {
+      html += '<div style="text-align:center;color:var(--text2);padding:20px;">暂无技能 — 完成一次完整的漫剧流程后会自动生成</div>';
+    }
+    for (const s of skills) {
+      const steps = (s.pipeline_steps || []).map((st,i) => `<li>${esc(st.step||'')}: ${esc(st.description||'')}</li>`).join('');
+      html += `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:13px;color:var(--accent);">${esc(s.name||'')}</span>
+          <button class="btn btn-danger btn-sm" onclick="deleteSkill('${escAttr(s.id)}')">🗑 删除</button>
+        </div>
+        <div style="font-size:11px;color:var(--text2);margin-top:2px;">触发: ${esc((s.description||'').substring(0,200))}</div>
+        ${steps ? `<ol style="font-size:11px;color:var(--text2);margin-top:4px;padding-left:20px;">${steps}</ol>` : ''}
+        <div style="font-size:10px;color:var(--text2);margin-top:2px;">使用次数: ${s.usage_count||0} | 来源项目: ${esc(s.source_project_id||'')}</div>
+      </div>`;
+    }
+    document.getElementById('tabContent').innerHTML = html;
+  } catch(e) {
+    document.getElementById('tabContent').innerHTML = '<div style="text-align:center;color:var(--err);padding:20px;">加载失败: ' + e.message + '</div>';
+  }
+}
+
+async function deleteSkill(skillId) {
+  if (!confirm('确定删除此技能？')) return;
+  const resp = await fetch('/api/skills/' + encodeURIComponent(skillId), {method:'DELETE'});
+  const data = await resp.json();
+  if (data.success) { toast('已删除'); loadSkillsTab(); }
+  else { toast('删除失败: ' + (data.error||'')); }
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -755,6 +755,15 @@ COMPREHENSIVE_BREAKDOWN_PROMPT = """你是一位专业的漫画/影视编剧大�
 4. scene_description 要详细到可以直接作为 Stable Diffusion 提示词
 5. voice_line 要包含语气指示，用于配音演员参考
 6. video_motion 用于后续图生视频工作流的附加运动描述
+7. **重要：以下字段必须用英文输出（用于 ComfyUI 生图提示词）**：
+   - characters[].appearance_detail
+   - characters[].clothing_details
+   - environments[].description
+   - panels[].scene_description
+   - panels[].emotion
+   - panels[].camera
+   - panels[].video_motion
+   其他字段（name, description, dialogue, voice_line 等）用中文
 
 故事前提：{premise}
 风格/类型：{genre}"""
@@ -814,6 +823,17 @@ async def comprehensive_breakdown(request: Request):
                     p["id"] = f"panel_{p.get('panel_num', i+1)}"
             _store.save_characters(project_id, chars)
             _store.save_environments(project_id, envs)
+
+            # Auto-assemble English positive/negative prompts for each panel
+            style = _store.get_style(project_id) or {}
+            chars_map = {c["id"]: c for c in chars}
+            envs_map = {e["id"]: e for e in envs}
+            for p in panels:
+                positive = _assemble_single_prompt(p, chars_map, envs_map, style)
+                negative = style.get("negative_prompt", "low quality, blurry, deformed hands, deformed face, text, watermark")
+                p["prompt_positive"] = positive
+                p["prompt_negative"] = negative
+
             _store.save_panels(project_id, panels)
             _characters[project_id] = chars
             _environments[project_id] = envs
@@ -898,13 +918,9 @@ async def generate_style_preview(project_id: str, request: Request):
     for i in range(count):
         seed = seeds[i] if i < len(seeds) else -1
         prompt = (
-            f"{style.get('style_name', '')}, "
             f"{style.get('positive_prefix', 'masterpiece, high quality')}, "
-            f"1girl, a young warrior woman with flowing hair and detailed facial features, "
-            f"wearing elegant traditional robes with intricate embroidery, "
-            f"standing in a serene bamboo forest, ancient stone pathway, "
-            f"traditional pavilion in background, misty mountains, "
-            f"soft cinematic lighting, high quality illustration"
+            f"a kitten sitting next to a flower pot, "
+            f"soft lighting, high quality illustration"
         )
         params = await _build_gen_params(
             {"steps": 20, "cfg": 7, "seed": seed},
@@ -945,6 +961,99 @@ async def clear_preview_images(project_id: str):
     style["selected_preview"] = -1
     _store.save_style(project_id, _dict_to_style(style))
     return {"success": True, "message": "预览图已清理"}
+
+
+@app_web.get("/api/projects/{project_id}/style/workflow-params")
+async def get_workflow_params(project_id: str):
+    """Extract model, LoRA, sampler info from the current workflow config.
+
+    Returns details about the workflow nodes so the user can see what
+    model/LoRA/sampler will be used for all subsequent generations.
+    """
+    style = _store.get_style(project_id) or {}
+    wf_id = style.get("workflow_id", "")
+    if not wf_id:
+        return JSONResponse({"error": "请先选择生图工作流"}, status_code=400)
+
+    adapter = _get_comfyui()
+    try:
+        config = await adapter.get_workflow_config(wf_id)
+    except Exception as e:
+        return JSONResponse({"error": f"获取工作流配置失败: {e}"}, status_code=400)
+
+    nodes = config.get("nodes", [])
+    params_info = {
+        "workflow_id": wf_id,
+        "checkpoints": [],   # 大模型/底模
+        "loras": [],         # LoRA 模型
+        "sampler": "",       # 采样器
+        "scheduler": "",     # 调度器
+        "steps": "",         # 步数
+        "cfg": "",           # CFG scale
+        "resolution": "",    # 分辨率
+        "positive_prompt": "",  # 正向提示词节点
+        "negative_prompt": "",  # 负向提示词节点
+    }
+
+    for node in nodes:
+        ntype = node.get("type", "")
+        title = node.get("title", "")
+        widget_values = node.get("widget_values", {})
+        inputs = node.get("inputs", [])
+
+        # Checkpoint/Model loader
+        if "CheckpointLoader" in ntype or "UNETLoader" in ntype:
+            for inp in inputs:
+                if inp.get("name") == "ckpt_name" or inp.get("name") == "unet_name":
+                    params_info["checkpoints"].append(inp.get("default", ""))
+            if title and title not in params_info["checkpoints"]:
+                params_info["checkpoints"].append(title)
+
+        # LoRA loader
+        if "LoraLoader" in ntype:
+            lora_info = {}
+            for inp in inputs:
+                if inp.get("name") == "lora_name":
+                    lora_info["name"] = inp.get("default", "")
+                if inp.get("name") == "strength_model" or inp.get("name") == "strength":
+                    lora_info["strength"] = inp.get("default", 1.0)
+            if lora_info:
+                params_info["loras"].append(lora_info)
+
+        # Sampler
+        if "KSampler" in ntype or "Sampler" in ntype:
+            for inp in inputs:
+                if inp.get("name") == "sampler_name":
+                    params_info["sampler"] = inp.get("default", "")
+                if inp.get("name") == "scheduler":
+                    params_info["scheduler"] = inp.get("default", "")
+                if inp.get("name") == "steps":
+                    params_info["steps"] = inp.get("default", "")
+                if inp.get("name") == "cfg":
+                    params_info["cfg"] = inp.get("default", "")
+
+        # CLIP Text Encode (positive/negative prompts)
+        if "CLIPTextEncode" in ntype:
+            widget_text = widget_values.get("text", "")
+            if "negative" in title.lower():
+                if not params_info["negative_prompt"]:
+                    params_info["negative_prompt"] = widget_text
+            else:
+                if not params_info["positive_prompt"]:
+                    params_info["positive_prompt"] = widget_text
+
+        # Empty Latent Image (resolution)
+        if "EmptyLatentImage" in ntype:
+            w = h = ""
+            for inp in inputs:
+                if inp.get("name") == "width":
+                    w = inp.get("default", "")
+                if inp.get("name") == "height":
+                    h = inp.get("default", "")
+            if w and h:
+                params_info["resolution"] = f"{w}x{h}"
+
+    return {"success": True, "params": params_info}
 
 
 def _dict_to_style(d: dict) -> "StyleConfig":
@@ -1316,6 +1425,48 @@ async def auto_generate_skill(request: Request):
 async def list_skills():
     """List auto-generated comic skills."""
     return {"skills": _store.list_skills()}
+
+
+@app_web.delete("/api/skills/{skill_id}")
+async def delete_skill(skill_id: str):
+    """Delete a skill template by ID."""
+    skill_file = _store._skills_dir / f"{skill_id}.json"
+    if skill_file.exists():
+        skill_file.unlink()
+        return {"success": True, "message": f"技能 '{skill_id}' 已删除"}
+    return JSONResponse({"error": "skill not found"}, status_code=404)
+
+
+@app_web.get("/api/memory/list")
+async def list_memories():
+    """List all agent memories with full content."""
+    agent = get_agent()
+    mem = agent.memory
+    all_memories = []
+    for m in sorted(mem.all(), key=lambda x: -x.updated_at):
+        all_memories.append({
+            "id": m.id,
+            "category": m.category,
+            "tier": m.tier.value,
+            "title": m.title,
+            "content": m.content,
+            "confidence": m.confidence,
+            "created_at": m.created_at,
+            "updated_at": m.updated_at,
+        })
+    return {"memories": all_memories}
+
+
+@app_web.delete("/api/memory/{memory_id}")
+async def delete_memory(memory_id: str):
+    """Delete a specific memory by ID."""
+    agent = get_agent()
+    mem = agent.memory
+    all_ids = [m.id for m in mem.all()]
+    if memory_id not in all_ids:
+        return JSONResponse({"error": "memory not found"}, status_code=404)
+    mem.delete(memory_id)
+    return {"success": True, "message": f"记忆 '{memory_id}' 已删除"}
 
 
 # ── Batch Generation ────────────────────────────────────────────────
