@@ -3,7 +3,6 @@
 import pytest
 import yaml
 from agent_compiler.core.agent import Agent
-from agent_compiler.agent import Agent as AgentCompat
 
 
 class TestCacheSeeds:

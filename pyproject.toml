@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-compiler"
-version = "0.1.0"
-description = "LLM-as-compiler: three-layer agent with rule engine, pattern cache, and LLM fallback"
+version = "0.3.0"
+description = "Agent Compiler v0.3: Reflexion loop, tiered memory, Tree-of-Thought reasoning, MCP client, skill system"
 requires-python = ">=3.10"
 dependencies = [
     "sentence-transformers>=2.0",
@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["anthropic>=0.30", "openai>=1.0"]
+mcp = ["mcp>=1.0"]
 cloud = ["boto3>=1.28"]
 dev = ["pytest>=7.0"]
 

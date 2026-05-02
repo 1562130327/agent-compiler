@@ -15,6 +15,7 @@ Environment variables for real LLM:
 
 import json
 import sys
+import time
 from pathlib import Path
 
 from agent_compiler.core.agent import Agent
@@ -25,12 +26,18 @@ def _print_result(result):
     """Display an agent result nicely."""
     source_label = {"cache": "CACHE", "llm": "LLM"}.get(result.source, result.source)
 
+    # Token info line
+    token_info = ""
+    if result.tokens and result.tokens.get("total"):
+        tk = result.tokens
+        token_info = f" | {tk['total']:,} tokens (P:{tk['prompt']:,} C:{tk['completion']:,})"
+
     # Show conversational text if available
     if result.text:
         print(f"\n{result.text}")
-        print(f"\n  [{source_label}] {result.latency_ms:.1f}ms")
+        print(f"\n  [{source_label}] {result.latency_ms:.1f}ms{token_info}")
     elif result.success and "steps" in result.data:
-        print(f"\n  [{source_label}] {result.latency_ms:.1f}ms")
+        print(f"\n  [{source_label}] {result.latency_ms:.1f}ms{token_info}")
         for s in result.data["steps"]:
             status = "OK" if s.get("success") else "FAIL"
             err = f" ({s.get('error', '')})" if not s.get("success") else ""
@@ -93,6 +100,7 @@ def interactive(agent: Agent):
             print()
             print("  内置指令（短输入）：")
             print("    报告 / 统计  — 查看效率报告")
+            print("    记忆          — 查看自演化记忆系统状态")
             print("    清除 / 清空  — 清除缓存重新开始")
             print("    帮助 / help  — 显示本帮助")
             print("    退出 / quit  — 退出程序")
@@ -103,14 +111,45 @@ def interactive(agent: Agent):
             print(f"\n{agent.efficiency_report()}")
             continue
 
+        if _is_cmd("记忆", "memory", "mem"):
+            mem = agent.memory
+            mem_stats = mem.stats()
+            print(f"\n{'=' * 40}")
+            print("  自演化记忆系统")
+            print(f"{'=' * 40}")
+            print(f"  记忆总数: {mem_stats['total_memories']}")
+            print(f"  分类:")
+            cat_labels = {"user_profile": "用户画像", "project": "项目信息",
+                         "pattern": "任务模式", "feedback": "反馈", "knowledge": "知识"}
+            for cat, count in mem_stats.get("by_category", {}).items():
+                print(f"    {cat_labels.get(cat, cat)}: {count}")
+            evo = mem_stats.get("evolution", {})
+            print(f"  演化统计:")
+            print(f"    自动提取: {evo.get('extractions', 0)} 次")
+            print(f"    合并相似: {evo.get('merges', 0)} 次")
+            print(f"    清理过期: {evo.get('prunes', 0)} 次")
+            print(f"    巩固轮次: {evo.get('consolidations', 0)} 次")
+            print(f"{'=' * 40}")
+            # Show recent memories
+            all_mems = mem.all()
+            if all_mems:
+                print("\n  最近记忆:")
+                for m in sorted(all_mems, key=lambda x: -x.updated_at)[:5]:
+                    age = (time.time() - m.created_at) / 3600
+                    age_str = f"{age:.1f}h前" if age < 48 else f"{age/24:.1f}d前"
+                    print(f"    [{m.category}] {m.title} (置信度:{m.confidence:.0%}, {age_str})")
+            print()
+            continue
+
         if _is_cmd("清除", "清空", "重置", "clear", "reset"):
             agent.cache.ram._cache.clear()
             agent.cache.embeddings._faiss = None
             agent.cache.embeddings._index.clear()
             agent.cache.embeddings._next_id = 0
             agent._metrics = {"cache": 0, "llm": 0, "total": 0}
+            agent._total_tokens = {"prompt": 0, "completion": 0, "total": 0}
             session_id = None
-            print("  缓存已清空，计数器已归零。")
+            print("  缓存已清空，计数器和 Token 统计已归零。")
             continue
 
         # ── Normal query ───────────────────────────────────────

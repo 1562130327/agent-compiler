@@ -44,13 +44,16 @@ class AgentConfig:
     """
     llm: LLMConfig = field(default_factory=LLMConfig)
     cache_dir: str = "./agent_cache"
-    similarity_threshold: float = 0.50
+    similarity_threshold: float = 0.55
     embedding_mode: str = "lightweight"   # lightweight | neural
     ram_max_entries: int = 1000
     ram_max_memory_mb: float = 200.0
     max_turns: int = 10                  # ReAct loop max iterations
     max_session_messages: int = 50       # conversation context window
     cache_seeds_path: str | None = None  # path to YAML file for cache pre-seeding
+    mcp_servers: list[dict] = field(default_factory=list)  # MCP server configs
+    skills_dirs: list[str] = field(default_factory=list)   # extra skill directories
+    context_max_tokens: int = 100_000    # context window token budget
 
     @classmethod
     def from_env(cls, **overrides) -> AgentConfig:
@@ -75,7 +78,7 @@ class AgentConfig:
         return cls(
             llm=llm,
             cache_dir=overrides.pop("cache_dir", None) or os.environ.get("AGENT_CACHE_DIR", "./agent_cache"),
-            similarity_threshold=float(overrides.pop("similarity_threshold", None) or os.environ.get("AGENT_SIMILARITY_THRESHOLD", "0.50")),
+            similarity_threshold=float(overrides.pop("similarity_threshold", None) or os.environ.get("AGENT_SIMILARITY_THRESHOLD", "0.55")),
             max_turns=int(overrides.pop("max_turns", None) or os.environ.get("AGENT_MAX_TURNS", "10")),
             max_session_messages=int(overrides.pop("max_session_messages", None) or os.environ.get("AGENT_MAX_SESSION_MSGS", "50")),
             cache_seeds_path=overrides.pop("cache_seeds_path", None) or os.environ.get("AGENT_CACHE_SEEDS"),
@@ -115,9 +118,12 @@ class AgentConfig:
         return cls(
             llm=llm,
             cache_dir=overrides.pop("cache_dir", None) or cache_data.get("dir", "./agent_cache"),
-            similarity_threshold=float(overrides.pop("similarity_threshold", None) or cache_data.get("similarity_threshold", 0.50)),
+            similarity_threshold=float(overrides.pop("similarity_threshold", None) or cache_data.get("similarity_threshold", 0.55)),
             max_turns=int(overrides.pop("max_turns", None) or agent_data.get("max_turns", 10)),
             max_session_messages=int(overrides.pop("max_session_messages", None) or agent_data.get("max_session_messages", 50)),
             cache_seeds_path=overrides.pop("cache_seeds_path", None) or cache_data.get("seeds_path"),
+            mcp_servers=overrides.pop("mcp_servers", None) or cfg_data.get("mcp_servers", []),
+            skills_dirs=overrides.pop("skills_dirs", None) or cfg_data.get("skills_dirs", []),
+            context_max_tokens=int(overrides.pop("context_max_tokens", None) or agent_data.get("context_max_tokens", 100_000)),
             **overrides,
         )

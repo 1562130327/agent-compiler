@@ -107,4 +107,8 @@ class ToolRegistry:
             from agent_compiler.tools.demo_tools import _BUILTIN_TOOLS, _BUILTIN_TOOL_DEFS
             cls._tools.update(_BUILTIN_TOOLS)
             cls._defs.update(_BUILTIN_TOOL_DEFS)
+            # Load real system tools (override mock list_directory with real one)
+            from agent_compiler.tools.system_tools import _SYSTEM_TOOLS, _SYSTEM_TOOL_DEFS
+            cls._tools.update(_SYSTEM_TOOLS)
+            cls._defs.update(_SYSTEM_TOOL_DEFS)
             cls._initialized = True

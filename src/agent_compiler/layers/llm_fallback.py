@@ -17,30 +17,49 @@ import os
 import re
 import time
 
-from agent_compiler.core.types import AgentResult
-
 
 # ── System prompt ───────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are Agent Compiler, a helpful AI assistant with access to system tools.
+SYSTEM_PROMPT = """You are Agent Compiler, a powerful AI assistant with real system and programming tools.
 
-## Your capabilities
-You can use the available tools to:
-- Check system status (CPU, memory, services)
-- Check disk usage
-- Search and analyze logs
-- Generate reports
-- List directory contents
-- Find large files
-- Get current time
+## Core workflow
+1. **Plan first**: understand the request, then decide the best approach
+2. **Read before editing**: always read files before modifying them
+3. **Execute**: use tools to accomplish the task
+4. **Verify**: check results and self-critique before responding
+
+## Self-check before responding
+- Did I fully address the user's request?
+- Are there any errors or omissions?
+- Is the response specific and actionable, not vague?
+- If code was changed, did I verify correctness?
+
+## Tools
+- **Shell**: execute_shell — run terminal commands (dangerous commands blocked)
+- **Files**: read_file, write_file, edit_file, glob_files, search_files, list_directory
+- **Programming**: execute_python, install_package, run_tests
+- **Git**: git_status, git_diff, git_log
+- **Web**: web_fetch, web_search
+- **System**: get_system_status, get_disk_usage, get_current_time, list_processes, search_logs
+- **Reports**: generate_report
+
+## Programming best practices
+1. glob_files → find relevant files by pattern
+2. read_file → understand existing code before touching it
+3. search_files → find references and patterns
+4. edit_file → precise text replacements (prefer over write_file for small edits)
+5. write_file → create new files or complete rewrites only
+6. execute_shell → run build/lint commands
+7. run_tests → verify changes work correctly
+8. git_diff → review all changes
 
 ## Rules
-- If the user greets you or chats casually, reply naturally in the user's language.
-- If the user asks who you are or what you can do, introduce yourself.
-- If the user asks you to do something, use the appropriate tool(s) to help them.
-- After receiving tool results, report them clearly in natural language.
-- Never make up tool results — only report what you actually received.
-- Be conversational and helpful. Reply in the same language the user uses."""
+- Reply in the same language the user uses
+- Be conversational for casual chat; be thorough for technical tasks
+- Report tool results clearly, never make up output
+- Edit existing files rather than creating new ones when possible
+- For file edits: read first, understand, then change — never guess"""
+
 
 
 # ── Mock responses for demo ─────────────────────────────────────────
@@ -151,6 +170,7 @@ class LLMProvider:
         all_tool_calls: list[dict] = []
         final_text = ""
         final_intent = user_input
+        total_tokens = {"prompt": 0, "completion": 0, "total": 0}
 
         for turn in range(self.max_turns):
             if self.provider == "mock":
@@ -161,6 +181,11 @@ class LLMProvider:
                 response = self._openai_turn(messages, tool_defs)
             else:
                 raise ValueError(f"Unknown provider: {self.provider}")
+
+            # Accumulate token usage from each turn
+            tokens = response.get("tokens", {})
+            for k in ("prompt", "completion", "total"):
+                total_tokens[k] += tokens.get(k, 0)
 
             # Check for tool calls
             tool_calls = response.get("tool_calls", [])
@@ -215,46 +240,292 @@ class LLMProvider:
                 tools_used = [tc["tool_name"] for tc in all_tool_calls]
                 final_text = f"Done. Executed: {', '.join(tools_used)}."
 
+        # ── Reflexion: self-critique and revise (non-mock only) ──
+        reflexion_rounds = 0
+        reflexion_log: list[dict] = []
+        if not self.is_mock and final_text:
+            for rev_round in range(2):  # max 2 revision rounds
+                score = self._evaluate_output(user_input, final_text, all_tool_calls)
+                reflexion_log.append({
+                    "round": rev_round + 1,
+                    "score": score.get("score", 0),
+                    "feedback": score.get("feedback", ""),
+                })
+                if score.get("score", 0) >= 4:
+                    break
+                # Revise based on feedback
+                revised = self._revise_output(
+                    user_input, final_text,
+                    score.get("feedback", "改进输出质量"),
+                    messages,
+                )
+                if revised and revised != final_text:
+                    final_text = revised
+                    reflexion_rounds += 1
+                else:
+                    break
+
         latency_ms = (time.perf_counter() - t0) * 1000
         return {
             "text": final_text,
             "tool_calls": all_tool_calls,
             "intent": final_intent,
             "latency_ms": latency_ms,
+            "tokens": total_tokens,
+            "reflexion_rounds": reflexion_rounds,
+            "reflexion_log": reflexion_log,
         }
 
-    # ── Backward compat: reason() ────────────────────────────────────
+    # ── Memory extraction ───────────────────────────────────────────
 
-    def reason(self, user_input: str) -> AgentResult:
-        """Legacy single-turn API. Returns AgentResult directly."""
-        t0 = time.perf_counter()
+    def extract_memories(self, user_input: str, assistant_reply: str) -> list[dict]:
+        """Extract key facts from a conversation turn for the memory system.
+
+        Returns a list of fact dicts with keys:
+          - category: user_profile | project | pattern | feedback | knowledge
+          - title: short summary
+          - content: the fact
+          - keywords: list of search keywords
+          - confidence: 0.0-1.0
+        """
+        if self.is_mock:
+            return self._mock_extract_memories(user_input, assistant_reply)
+
+        prompt = f"""Analyze this conversation turn and extract any key facts worth remembering about the user or project.
+
+User message: {user_input[:600]}
+Assistant reply: {assistant_reply[:600]}
+
+Output ONLY a JSON array of facts. Each fact must have:
+- "category": one of "user_profile", "project", "pattern", "feedback", "knowledge"
+- "title": short label in CHINESE (<60 chars)
+- "content": the fact itself in CHINESE (concise, <300 chars)
+- "keywords": array of 3-6 search keywords (MUST include both Chinese and English keywords)
+- "confidence": number 0.0-1.0 (how certain you are this is worth keeping)
+
+Categories:
+- user_profile: user's name, role, preferences, skills, habits
+- project: project names, repos, branches, tech stack, architecture
+- pattern: task patterns the user repeats
+- feedback: user corrections or preferences about how you should work
+- knowledge: other useful facts the user wants you to remember
+
+IMPORTANT: Write ALL text fields (title, content, keywords) in CHINESE so they can be searched by Chinese queries. Include English translations in keywords only.
+
+If nothing is worth remembering, output an empty array [].
+Do NOT wrap in markdown. Output ONLY valid JSON."""
+
         try:
-            intent, steps_data = self._call_llm_legacy(user_input)
-            latency = (time.perf_counter() - t0) * 1000
-            return AgentResult(
-                success=True,
-                data={"intent": intent, "steps_data": steps_data, "raw_input": user_input},
-                source="llm",
-                confidence=0.85,
-                latency_ms=latency,
-            )
-        except Exception as e:
-            latency = (time.perf_counter() - t0) * 1000
-            return AgentResult(
-                success=False, data=None, source="llm",
-                confidence=0.0, latency_ms=latency, error=str(e),
-            )
+            result = self._llm_json_call(prompt)
+            if isinstance(result, list):
+                return [f for f in result if isinstance(f, dict) and f.get("content")]
+            return []
+        except Exception:
+            return []
 
-    def _call_llm_legacy(self, user_input: str) -> tuple[str, list[dict]]:
-        """Legacy: single-turn JSON workflow compilation."""
-        if self.provider == "mock":
-            return self._mock_call(user_input)
+    def _llm_json_call(self, prompt: str) -> list | dict:
+        """Make a lightweight LLM call expecting JSON output."""
+        if self.provider in ("openai", "openai_compat"):
+            from openai import OpenAI
+            kwargs = {"api_key": self.api_key}
+            if self.api_base:
+                kwargs["base_url"] = self.api_base
+            client = OpenAI(**kwargs)
+            resp = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a fact extraction system. Output ONLY valid JSON, no markdown, no explanation."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=500,
+            )
+            text = resp.choices[0].message.content or ""
+            return self._try_parse_json(text) or []
         elif self.provider == "claude":
-            return self._claude_call_legacy(user_input)
-        elif self.provider in ("openai", "openai_compat"):
-            return self._openai_compat_call_legacy(user_input)
-        else:
-            raise ValueError(f"Unknown provider: {self.provider}")
+            import anthropic
+            kwargs = {"api_key": self.api_key}
+            client = anthropic.Anthropic(**kwargs)
+            msg = client.messages.create(
+                model=self.model,
+                max_tokens=500,
+                system="You are a fact extraction system. Output ONLY valid JSON, no markdown, no explanation.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = msg.content[0].text if msg.content else ""
+            return self._try_parse_json(text) or []
+        return []
+
+    def _mock_extract_memories(self, user_input: str, assistant_reply: str) -> list[dict]:
+        """Heuristic memory extraction for mock mode."""
+        import re
+        from agent_compiler.core.memory import _extract_chinese_keywords
+        facts = []
+        inp = user_input.strip()
+
+        # Name patterns
+        for m in re.findall(r'(?:我叫|我是|我的名字是)\s*(.{2,20}?)(?:[，,。！\s]|$)', inp):
+            name = m.strip()
+            if name and len(name) >= 2:
+                facts.append({
+                    "category": "user_profile",
+                    "title": f"用户姓名: {name}",
+                    "content": f"用户名叫{name}",
+                    "keywords": ["名字", name, "用户"],
+                    "confidence": 0.9,
+                })
+
+        # Role/job patterns
+        for m in re.findall(r'(?:我是|我的职业是|我的工作是|一名|一个)\s*(.{2,30}?(?:工程师|开发者|设计师|经理|运维|学生|教师|医生))(?:[，,。！\s]|$)', inp):
+            role = m.strip()
+            if role:
+                facts.append({
+                    "category": "user_profile",
+                    "title": f"用户职业: {role}",
+                    "content": f"用户的职业/角色是{role}",
+                    "keywords": ["职业", "角色", role],
+                    "confidence": 0.85,
+                })
+
+        # Skill/tech patterns
+        for m in re.findall(r'(?:主要用|常用|擅长|用|使用)\s*(.{2,50}?(?:Python|Go|Java|Rust|C\+\+|JavaScript|TypeScript|Ruby|PHP|SQL|React|Vue|Docker|K8s|Linux)(?:[、和,及\s]*(?:Python|Go|Java|Rust|C\+\+|JavaScript|TypeScript|Ruby|PHP|SQL|React|Vue|Docker|K8s|Linux))*)', inp):
+            skills = m.strip()
+            if skills:
+                facts.append({
+                    "category": "user_profile",
+                    "title": f"技术栈: {skills[:50]}",
+                    "content": f"用户使用的技术: {skills}",
+                    "keywords": ["技术栈", "编程语言"] + re.split(r'[、,，\s]+', skills),
+                    "confidence": 0.8,
+                })
+
+        # Remember directives
+        for m in re.findall(r'(?:记住|别忘了)[：:]\s*(.{4,200}?)(?:[。！？\n]|$)', inp):
+            content = m.strip()
+            if len(content) > 3:
+                facts.append({
+                    "category": "knowledge",
+                    "title": content[:60],
+                    "content": content[:300],
+                    "keywords": _extract_chinese_keywords(content),
+                    "confidence": 0.9,
+                })
+
+        return facts
+
+    # ── Reflexion: self-evaluation and revision ────────────────────────
+
+    def _evaluate_output(self, user_input: str, output: str,
+                         tool_calls: list[dict]) -> dict:
+        """LLM self-evaluates its output on a 1-5 scale.
+
+        Returns dict with 'score' (int) and 'feedback' (str in Chinese).
+        """
+        tools_summary = ""
+        if tool_calls:
+            tools_used = [tc["tool_name"] for tc in tool_calls]
+            tools_summary = f"\n工具执行: {', '.join(tools_used)}"
+
+        prompt = f"""评估以下 AI 助手回复的质量。
+
+用户请求: {user_input[:500]}
+
+助手回复:
+{output[:1000]}{tools_summary}
+
+请按 1-5 分打分:
+- 1: 完全错误或无关
+- 2: 有重大问题 — 遗漏关键信息、令人困惑、部分错误
+- 3: 基本可接受但可大幅改进 — 模糊、不完整、略有偏差
+- 4: 良好 — 较好地回应了请求，只有小改进空间
+- 5: 优秀 — 全面、准确、结构清晰，直接回应请求
+
+输出 ONLY JSON:
+{{"score": <整数1-5>, "feedback": "<1-2句中评语，说明哪里需要改进或哪里做得好>"}}
+
+4-5分时 feedback 简要说明哪里做得好。1-3分时 feedback 简明指出问题及改进方向。"""
+
+        try:
+            result = self._llm_json_call(prompt)
+            if isinstance(result, dict) and "score" in result:
+                return {
+                    "score": int(result.get("score", 3)),
+                    "feedback": str(result.get("feedback", "")),
+                }
+        except Exception:
+            pass
+        return {"score": 4, "feedback": "无法评估，假定质量合格。"}
+
+    def _revise_output(self, user_input: str, original: str,
+                       feedback: str, messages: list[dict]) -> str | None:
+        """Ask the LLM to revise its output based on evaluation feedback.
+
+        Returns revised text, or None if revision fails.
+        """
+        recent_context = []
+        for m in messages[-6:]:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if content and role in ("user", "assistant", "tool_result"):
+                recent_context.append(f"[{role}] {str(content)[:300]}")
+        context_str = "\n".join(recent_context) if recent_context else "(无上下文)"
+
+        prompt = f"""根据质量反馈修订以下 AI 回复。
+
+用户请求: {user_input[:500]}
+
+近期上下文:
+{context_str[:800]}
+
+原始回复:
+{original[:1000]}
+
+改进反馈:
+{feedback}
+
+请生成修订后的回复，解决反馈中提到的问题。
+- 如果遗漏了信息，请补充
+- 如果有错误，请更正
+- 如果过于模糊，请添加具体内容
+- 保持与原始回复相同的语言和语气
+- 仅输出修订后的回复文本，不要 JSON，不要 markdown 包裹"""
+
+        try:
+            if self.provider in ("openai", "openai_compat"):
+                from openai import OpenAI
+                kwargs = {"api_key": self.api_key}
+                if self.api_base:
+                    kwargs["base_url"] = self.api_base
+                client = OpenAI(**kwargs)
+                resp = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "你是一个根据反馈修订回复的助手。只输出修订后的文本，无需解释。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,
+                    max_tokens=1024,
+                )
+                text = resp.choices[0].message.content or ""
+                return text.strip() if text.strip() else None
+
+            elif self.provider == "claude":
+                import anthropic
+                kwargs = {"api_key": self.api_key}
+                client = anthropic.Anthropic(**kwargs)
+                msg = client.messages.create(
+                    model=self.model,
+                    max_tokens=1024,
+                    system="你是一个根据反馈修订回复的助手。只输出修订后的文本，无需解释。",
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = msg.content[0].text if msg.content else ""
+                return text.strip() if text.strip() else None
+
+        except Exception:
+            pass
+
+        return None
 
     # ── Mock ────────────────────────────────────────────────────────
 
@@ -308,11 +579,6 @@ class LLMProvider:
             "tool_calls": resp["steps"],
             "reply": "",
         }
-
-    def _mock_call(self, user_input: str) -> tuple[str, list[dict]]:
-        """Legacy mock: returns intent + steps for backward compat."""
-        result = self._mock_react_turn(user_input, [], [], 0)
-        return result["intent"], result["tool_calls"]
 
     @staticmethod
     def _chat_reply(user_input: str) -> str:
@@ -444,19 +710,6 @@ class LLMProvider:
 
         return {"reply": "\n".join(text_parts), "intent": "reply"}
 
-    def _claude_call_legacy(self, user_input: str) -> tuple[str, list[dict]]:
-        """Legacy: single-turn JSON via Claude."""
-        import anthropic
-        kwargs = {"api_key": self.api_key}
-        client = anthropic.Anthropic(**kwargs)
-        msg = client.messages.create(
-            model=self.model,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_input}],
-        )
-        return _parse_response(msg.content[0].text)
-
     # ── OpenAI / OpenAI-compatible ──────────────────────────────────
 
     def _openai_turn(self, messages: list[dict], tool_defs: list[dict]) -> dict:
@@ -521,37 +774,39 @@ class LLMProvider:
                     "tool_call_id": tc.id,
                 })
 
+        # Extract token usage
+        tokens = {}
+        if resp.usage:
+            tokens = {
+                "prompt": resp.usage.prompt_tokens or 0,
+                "completion": resp.usage.completion_tokens or 0,
+                "total": resp.usage.total_tokens or 0,
+            }
+
         text = msg.content or ""
 
+        result: dict = {"intent": "reply", "tokens": tokens}
+
         if tool_calls:
-            return {"tool_calls": tool_calls, "intent": "task"}
+            result["tool_calls"] = tool_calls
+            result["intent"] = "task"
+            return result
 
         # Try to parse JSON from text (for providers without native tool support)
         parsed = self._try_parse_json(text)
         if parsed:
             intent = parsed.get("intent", "task")
             if parsed.get("tool_calls"):
-                return {"tool_calls": parsed["tool_calls"], "intent": intent}
+                result["tool_calls"] = parsed["tool_calls"]
+                result["intent"] = intent
+                return result
             if parsed.get("reply"):
-                return {"reply": parsed["reply"], "intent": intent}
+                result["reply"] = parsed["reply"]
+                result["intent"] = intent
+                return result
 
-        return {"reply": text, "intent": "reply"}
-
-    def _openai_compat_call_legacy(self, user_input: str) -> tuple[str, list[dict]]:
-        """Legacy: single-turn JSON via OpenAI."""
-        from openai import OpenAI
-        kwargs = {"api_key": self.api_key}
-        if self.api_base:
-            kwargs["base_url"] = self.api_base
-        client = OpenAI(**kwargs)
-        resp = client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_input},
-            ],
-        )
-        return _parse_response(resp.choices[0].message.content)
+        result["reply"] = text
+        return result
 
     @staticmethod
     def _try_parse_json(text: str) -> dict | None:
@@ -563,28 +818,3 @@ class LLMProvider:
             return json.loads(text)
         except (json.JSONDecodeError, TypeError):
             return None
-
-
-# ── Backward compat alias ────────────────────────────────────────────
-
-LLMFallback = LLMProvider
-
-
-# ── Response parsing ────────────────────────────────────────────────
-
-def _parse_response(text: str) -> tuple[str, list[dict]]:
-    """Parse LLM JSON response, extracting from code blocks if present."""
-    m = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-    if m:
-        text = m.group(1)
-    steps_data = json.loads(text)
-    if isinstance(steps_data, dict):
-        intent = steps_data.get("intent", "")
-        steps = steps_data.get("steps", [])
-    elif isinstance(steps_data, list):
-        intent = "multi-step task"
-        steps = steps_data
-    else:
-        intent = ""
-        steps = []
-    return intent, steps

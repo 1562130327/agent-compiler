@@ -1,7 +1,7 @@
 """End-to-end tests for the Agent if-else dispatch."""
 
 import pytest
-from agent_compiler.agent import Agent
+from agent_compiler.core.agent import Agent
 
 
 class TestAgent:
@@ -52,11 +52,11 @@ class TestAgent:
         assert "缓存命中" in report
 
     def test_metrics_accumulate(self, agent):
-        agent.process("unknown task")
-        agent.process("another task")
+        agent.process("帮我分析网络连接状态")
+        agent.process("生成健康检查报告")
         s = agent.stats()
         assert s["total"] == 2
-        assert s["llm"] == 2
+        assert s["llm"] == 2  # two distinct queries, both miss cache
 
     def test_cache_seeds_produce_hit(self, tmp_path):
         """Agent with cache seeds hits cache on first matching query."""

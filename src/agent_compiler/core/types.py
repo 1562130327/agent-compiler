@@ -33,6 +33,7 @@ class WorkflowTemplate:
     last_hit_at: float = field(default_factory=time.time)
     params_schema: dict[str, Any] = field(default_factory=dict)
     original_input: str = ""  # original user input in the user's language
+    category: str = "task"    # chat | task | code — for category-specific thresholds
 
     @staticmethod
     def generate_id(intent: str) -> str:
@@ -55,6 +56,7 @@ class AgentResult:
     workflow_id: str | None = None
     error: str | None = None
     text: str = ""  # conversational response for display
+    tokens: dict[str, int] = field(default_factory=dict)  # {prompt, completion, total}
 
 
 @dataclass
