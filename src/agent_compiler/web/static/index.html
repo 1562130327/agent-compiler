@@ -152,6 +152,7 @@ body {
   <span class="stat">LLM:<strong id="statLLM">0</strong></span>
   <span id="queueInfo" style="font-size:10px;color:var(--text2);margin-left:8px;">ComfyUI: --</span>
   <span id="projectFolder" style="font-size:10px;color:var(--text2);margin-left:auto;"></span>
+  <button class="btn btn-danger btn-sm" id="btnDeleteProject" style="display:none;margin-left:8px;" onclick="deleteCurrentProject()">删除项目</button>
 </div>
 
 <!-- ── Main Split ── -->
@@ -252,8 +253,41 @@ async function refreshProjects() {
 }
 
 async function updateProjectFolder() {
-  if (!currentProjectId) { document.getElementById('projectFolder').textContent = ''; return; }
-  document.getElementById('projectFolder').innerHTML = `📁 comic_data/${esc(currentProjectId)}/`;
+  const btn = document.getElementById('btnDeleteProject');
+  if (!currentProjectId) {
+    document.getElementById('projectFolder').textContent = '';
+    if (btn) btn.style.display = 'none';
+    return;
+  }
+  try {
+    const resp = await fetch('/api/projects/' + currentProjectId + '/folder');
+    const data = await resp.json();
+    document.getElementById('projectFolder').textContent = '📁 ' + (data.folder || ('comic_data/' + currentProjectId + '/'));
+    document.getElementById('projectFolder').title = '点击查看项目文件夹';
+    document.getElementById('projectFolder').style.cursor = 'pointer';
+    document.getElementById('projectFolder').onclick = () => toast('项目文件夹: ' + (data.folder || 'comic_data/' + currentProjectId + '/'));
+  } catch(e) {
+    document.getElementById('projectFolder').textContent = '📁 comic_data/' + esc(currentProjectId) + '/';
+  }
+  if (btn) btn.style.display = 'inline-block';
+}
+
+async function deleteCurrentProject() {
+  if (!currentProjectId) return;
+  if (!confirm('确定删除项目 "' + currentProjectId + '" 吗？\n\n这将永久删除该项目的所有数据（角色、环境、分镜、风格配置等）。')) return;
+  try {
+    const resp = await fetch('/api/projects/' + currentProjectId, {method:'DELETE'});
+    const data = await resp.json();
+    if (data.success) {
+      toast('项目已删除: ' + currentProjectId);
+      currentProjectId = null;
+      document.getElementById('btnDeleteProject').style.display = 'none';
+      await refreshProjects();
+      switchTab('story');
+    }
+  } catch(e) {
+    toast('删除失败: ' + e.message);
+  }
 }
 
 async function createProject() {
@@ -320,30 +354,8 @@ async function sendChat() {
       addChatMsg('assistant', '请求失败: ' + e.message);
     }
   } else {
-    // Regular chat
-    addChatMsg('system', '思考中...');
-    try {
-      const resp = await fetch('/api/chat', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({message: msg, session_id: currentProjectId || undefined}),
-      });
-      const data = await resp.json();
-      document.querySelectorAll('.chat-msg.system').forEach(el => {
-        if (el.textContent.includes('思考中')) el.remove();
-      });
-      if (data.error) {
-        addChatMsg('assistant', '错误: ' + data.error);
-      } else {
-        let text = data.text || data.reply || '';
-        // Detect if response contains a story — offer import
-        if (text.length > 200 && /故事|角色|场景|分镜/.test(text)) {
-          text += '\n\n<div class="import-btn"><button class="btn btn-primary btn-sm" onclick="importStoryToEditor()">📥 导入故事到编辑器</button></div>';
-        }
-        addChatMsg('assistant', text);
-      }
-    } catch(e) {
-      addChatMsg('assistant', '请求失败: ' + e.message);
-    }
+    // Regular chat — streaming SSE for real-time display
+    sendChatStream(msg);
   }
   refreshStats();
 }
@@ -362,6 +374,73 @@ function addChatMsg(role, text) {
 
   // Make import button work
   div.querySelector('.import-btn button')?.addEventListener('click', importStoryToEditor);
+}
+
+async function sendChatStream(msg) {
+  addChatMsg('system', 'thinking...');
+  try {
+    const resp = await fetch('/api/chat/stream', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: msg, session_id: currentProjectId || undefined}),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let msgDiv = null;
+    const thinkingDiv = document.querySelector('.chat-msg.system:last-of-type');
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, {stream: true});
+      const lines = chunk.split('\n');
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(line.substring(6));
+          if (event.type === 'thinking') {
+            if (thinkingDiv) thinkingDiv.textContent = event.text;
+          } else if (event.type === 'reply_chunk') {
+            if (!msgDiv) {
+              if (thinkingDiv) thinkingDiv.remove();
+              msgDiv = document.createElement('div');
+              msgDiv.className = 'chat-msg assistant';
+              document.getElementById('chatMessages').appendChild(msgDiv);
+            }
+            fullText += event.text;
+            msgDiv.innerHTML = esc(fullText).replace(/\n/g, '<br>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') +
+              '<span class="time">' + new Date().toLocaleTimeString() + '</span>';
+            document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+          } else if (event.type === 'done') {
+            if (!msgDiv && !fullText) {
+              fullText = event.text || '';
+              if (thinkingDiv) thinkingDiv.remove();
+              msgDiv = document.createElement('div');
+              msgDiv.className = 'chat-msg assistant';
+              document.getElementById('chatMessages').appendChild(msgDiv);
+            }
+            if (msgDiv) {
+              let text = fullText || event.text || '';
+              if (text.length > 200 && /故事|角色|场景|分镜/.test(text)) {
+                text += '\n\n<div class="import-btn"><button class="btn btn-primary btn-sm" onclick="importStoryToEditor()">导入故事到编辑器</button></div>';
+              }
+              msgDiv.innerHTML = esc(text).replace(/\n/g, '<br>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') +
+                '<span class="time">' + new Date().toLocaleTimeString() + '</span>';
+            }
+            document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+          } else if (event.type === 'error') {
+            if (thinkingDiv) thinkingDiv.remove();
+            addChatMsg('assistant', '错误: ' + event.text);
+          }
+        } catch(e) {}
+      }
+    }
+  } catch(e) {
+    document.querySelectorAll('.chat-msg.system').forEach(el => {
+      if (el.textContent.includes('thinking')) el.remove();
+    });
+    addChatMsg('assistant', '请求失败: ' + e.message);
+  }
 }
 
 function importStoryToEditor() {
@@ -948,7 +1027,8 @@ async function loadStyleTab() {
 
   document.getElementById('tabContent').innerHTML = `
     <div class="card">
-      <h3>第一步：选择画风</h3>
+      <h3>画风设置</h3>
+      <label>画风</label>
       <select id="stylePreset">
         <option value="日漫风格" ${(currentStyle.style_name||'')==='日漫风格'?'selected':''}>日漫风格</option>
         <option value="写实电影风" ${currentStyle.style_name==='写实电影风'?'selected':''}>写实电影风</option>
@@ -958,57 +1038,45 @@ async function loadStyleTab() {
         <option value="暗黑哥特" ${currentStyle.style_name==='暗黑哥特'?'selected':''}>暗黑哥特</option>
         <option value="自定义" ${currentStyle.style_name==='自定义'?'selected':''}>自定义</option>
       </select>
-    </div>
-    <div class="card">
-      <h3>第二步：选择模型和工作流</h3>
-      <label>生图工作流</label>
-      <select id="styleWorkflow"><option value="">-- 选择 --</option>${wfOpts}</select>
-      <label style="margin-top:6px;">角色参考图工作流</label>
-      <select id="styleCharWf"><option value="">-- 同生图工作流 --</option>${wfOpts}</select>
-      <label>环境参考图工作流</label>
-      <select id="styleEnvWf"><option value="">-- 同生图工作流 --</option>${wfOpts}</select>
-      <label>视频工作流 (图生视频)</label>
-      <select id="styleVideoWf"><option value="">-- 选择 --</option>${allWorkflows.filter(w=>w.id.includes('视频')||w.id.includes('LTX')||w.id.includes('Wan')).map(w=>`<option value="${escAttr(w.id)}" ${w.id===currentStyle.video_workflow?'selected':''}>${esc(w.id.substring(0,50))}</option>`).join('')}</select>
-    </div>
-    <div class="card">
-      <h3>第三步：参数设置</h3>
-      <div class="form-row">
-        <div class="form-group"><label>种子 (-1=随机)</label><input type="number" id="styleSeed" value="-1"></div>
-        <div class="form-group"><label>CFG Scale</label><input type="number" id="styleCfg" value="7" step="0.5"></div>
-        <div class="form-group"><label>迭代步数</label><input type="number" id="styleSteps" value="20"></div>
-      </div>
-    </div>
-    <div class="card">
-      <h3>第四步：提示词模板</h3>
-      <div class="form-group"><label>正向提示词前缀（所有分镜/角色/环境共用）</label>
-      <textarea id="stylePositive" rows="2">${esc(currentStyle.positive_prefix||'masterpiece, best quality')}</textarea></div>
-      <div class="form-group"><label>负向提示词</label>
-      <textarea id="styleNegative" rows="2">${esc(currentStyle.negative_prompt||'低质量, 模糊, 畸形手, 畸形脸, 文字, 水印')}</textarea></div>
+      <label style="margin-top:8px;">正向提示词前缀</label>
+      <textarea id="stylePositive" rows="2">${esc(currentStyle.positive_prefix||'masterpiece, best quality')}</textarea>
+      <label>负向提示词</label>
+      <textarea id="styleNegative" rows="2">${esc(currentStyle.negative_prompt||'低质量, 模糊, 畸形手, 畸形脸, 文字, 水印')}</textarea>
     </div>
     <div class="card" style="background:var(--bg);border:1px solid var(--accent);">
-      <h3>第五步：审图 — 生成预览确认风格 ⭐</h3>
-      <p style="font-size:11px;color:var(--text2);margin-bottom:4px;">固定预览提示词（与项目内容无关，仅用于查看画风效果）：</p>
-      <p style="font-size:12px;color:var(--accent);margin-bottom:8px;padding:4px 8px;background:var(--bg2);border-radius:4px;">🐱 "一只小猫在花盆旁边"</p>
-      <p style="font-size:11px;color:var(--text2);margin-bottom:6px;">生成10张预览图，选中满意的一张——此后<strong>所有角色/环境/分镜都用选中图的模型/LoRA/采样器参数</strong>，保持画风统一。</p>
-      <button class="btn btn-primary" id="btnGenPreview" onclick="generateStylePreview(10)">🎨 生成10张预览图</button>
+      <h3>审图 — 系统自动遍历不同模型组合 ⭐</h3>
+      <p style="font-size:11px;color:var(--text2);margin-bottom:4px;">系统会自动从 ComfyUI 获取可用的工作流，用不同组合各生成一张。你只需要看哪个效果好，选中即可。</p>
+      <p style="font-size:11px;color:var(--text2);margin-bottom:8px;">预览图将使用项目的实际角色/环境描述作为提示词，比用通用图片更能看出效果。</p>
+      <p style="font-size:11px;color:var(--accent2);margin-bottom:4px;">不会生成视频，只生成静帧图片。</p>
+      <div class="form-row" style="margin-bottom:8px;">
+        <div class="form-group"><label>生成数量</label><input type="number" id="previewCount" value="10" min="2" max="30" style="width:70px;"></div>
+      </div>
+      <button class="btn btn-primary" id="btnGenPreview" onclick="generateStylePreview(parseInt(document.getElementById('previewCount').value)||10)">生成预览图</button>
       <span id="previewStatus" style="font-size:11px;color:var(--text2);margin-left:8px;"></span>
       <div class="result-grid" id="previewGrid" style="margin-top:8px;">
-        ${previewImgs.map((img, i) => `
+        ${previewImgs.map((img, i) => {
+          const combo = (currentStyle.preview_combo_map||[])[i] || {};
+          return `
           <div class="result-card ${i===selectedPreview?'selected':''}" onclick="selectPreview(${i})">
-            <img src="${escAttr(img)}">
-            <div class="result-label">#${i+1} ${i===selectedPreview?'✅ 已选中':''}</div>
+            <img src="${escAttr(img)}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%23333%22 width=%22200%22 height=%22200%22/><text fill=%22%23888%22 x=%22100%22 y=%22100%22 text-anchor=%22middle%22>加载中</text></svg>'">
+            <div class="result-label">#${i+1} ${i===selectedPreview?'已选中':''}</div>
+            <div style="font-size:9px;color:var(--text2);padding:2px 4px;">${esc(combo.checkpoint||combo.workflow_name||'').substring(0,30)}</div>
+            <div style="font-size:9px;color:var(--text2);">${esc(combo.sampler||'')} ${(combo.loras||[]).map(l=>l.name).join(',')}</div>
           </div>
-        `).join('')}
+        `}).join('')}
       </div>
-      ${previewImgs.length ? `<button class="btn btn-danger btn-sm" style="margin-top:6px;" onclick="clearPreviews()">🗑 清理预览图</button>` : ''}
+      ${previewImgs.length ? `<button class="btn btn-danger btn-sm" style="margin-top:6px;" onclick="clearPreviews()">清理预览图（重新生成也会自动清理旧图）</button>` : ''}
     </div>
     <div id="workflowParams" style="margin-top:8px;"></div>
     <div style="display:flex;gap:8px;margin-top:8px;">
-      <button class="btn btn-primary" onclick="saveStyleConfig()">💾 保存配置</button>
-      <button class="btn btn-success" onclick="confirmStyle()">✅ 确认风格 (当前: ${selectedPreview>=0?'#'+(selectedPreview+1):'无'})</button>
+      <button class="btn btn-primary" onclick="saveStyleConfig()">保存配置</button>
+      <button class="btn btn-success" onclick="confirmStyle()">确认风格 (当前: ${selectedPreview>=0?'#'+(selectedPreview+1):'无'})</button>
     </div>
     <div id="styleStatus" style="margin-top:8px;font-size:11px;color:var(--accent2);">
-      ${currentStyle.is_locked ? '✅ 风格已确认 — 全项目统一使用此画风参数' : '⚠ 请先生成预览并选中满意的一张'}
+      ${currentStyle.is_locked ? '风格已确认 — 全项目统一使用此画风参数' : '请生成预览并选中满意的一张'}
+    </div>
+    <div style="margin-top:8px;font-size:10px;color:var(--text2);">
+      项目文件夹: <code style="background:var(--bg);padding:2px 6px;border-radius:3px;">${esc(currentProjectId ? 'comic_data/' + currentProjectId + '/' : 'N/A')}</code>
     </div>
   `;
 
@@ -1026,45 +1094,49 @@ async function loadStyleTab() {
 
 async function saveStyleConfig() {
   if (!currentProjectId) return;
-  const wf = document.getElementById('styleWorkflow').value;
+  const elPreset = document.getElementById('stylePreset');
+  const elPos = document.getElementById('stylePositive');
+  const elNeg = document.getElementById('styleNegative');
+  if (!elPreset || !elPos || !elNeg) return;
   const body = {
-    style_name: document.getElementById('stylePreset').value,
-    workflow_id: wf,
-    positive_prefix: document.getElementById('stylePositive').value,
-    negative_prompt: document.getElementById('styleNegative').value,
-    character_ref_workflow: document.getElementById('styleCharWf').value || wf,
-    environment_ref_workflow: document.getElementById('styleEnvWf').value || wf,
-    video_workflow: document.getElementById('styleVideoWf').value,
-    fixed_params: {
-      seed: parseInt(document.getElementById('styleSeed').value) || -1,
-      cfg: parseFloat(document.getElementById('styleCfg').value) || 7,
-      steps: parseInt(document.getElementById('styleSteps').value) || 20,
-    },
+    style_name: elPreset.value,
+    positive_prefix: elPos.value,
+    negative_prompt: elNeg.value,
+    fixed_params: {seed: -1, cfg: 7, steps: 20},
   };
   await fetch('/api/projects/' + currentProjectId + '/style', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   });
-  toast('风格配置已保存');
 }
 
 async function confirmStyle() {
   if (!currentProjectId) { toast('请先选择项目'); return; }
   await saveStyleConfig();
-  const resp = await fetch('/api/projects/' + currentProjectId + '/style/lock', {method:'POST'});
+  // Read current style to get selected preview index
+  let selectedIdx = -1;
+  try {
+    const sr = await fetch('/api/projects/' + currentProjectId + '/style');
+    const sd = await sr.json();
+    selectedIdx = (sd.style || {}).selected_preview || -1;
+  } catch(e) {}
+  const resp = await fetch('/api/projects/' + currentProjectId + '/style/lock', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({selected_index: selectedIdx}),
+  });
   const data = await resp.json();
-  document.getElementById('styleStatus').innerHTML = '✅ 风格已确认 — 全项目统一使用此画风参数';
+  document.getElementById('styleStatus').innerHTML = '风格已确认 — 全项目统一使用此画风参数';
   toast(data.message || '风格已确认');
 }
 
 async function generateStylePreview(count) {
   if (!currentProjectId) { toast('请先选择项目'); return; }
+  // Auto-clean old previews first
+  await fetch('/api/projects/' + currentProjectId + '/style/clear-previews', {method:'POST'});
   await saveStyleConfig();
-  const wf = document.getElementById('styleWorkflow').value;
-  if (!wf) { toast('请先选择生图工作流'); return; }
   document.getElementById('btnGenPreview').disabled = true;
   const statusEl = document.getElementById('previewStatus');
-  statusEl.textContent = `提交 ${count} 张预览...`;
+  statusEl.textContent = '提交 ' + count + ' 张预览...';
   const resp = await fetch('/api/projects/' + currentProjectId + '/style/preview', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({count}),
@@ -1081,7 +1153,7 @@ function selectPreview(idx) {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({selected_preview: idx}),
   }).then(async () => {
-    toast('已选中预览图 #' + (idx+1) + ' — 正在获取模型/LoRA/采样器信息...');
+    toast('已选中预览图 #' + (idx+1) + ' — 确认风格后将使用该组合的模型/LoRA/采样器');
     await loadWorkflowParams();
     loadStyleTab();
   });
@@ -1090,22 +1162,27 @@ function selectPreview(idx) {
 async function loadWorkflowParams() {
   if (!currentProjectId) return;
   try {
-    const resp = await fetch('/api/projects/' + currentProjectId + '/style/workflow-params');
+    const resp = await fetch('/api/projects/' + currentProjectId + '/style');
     const data = await resp.json();
-    if (!data.success) return;
-    const p = data.params;
-    let html = '<div class="card" style="border:1px solid var(--accent2);"><h4>🔍 当前工作流参数（将用于所有生图）</h4><table style="width:100%;font-size:11px;border-collapse:collapse;">';
-    const addRow = (label, value) => { html += `<tr><td style="color:var(--text2);padding:2px 8px;">${label}</td><td style="padding:2px 8px;">${esc(String(value||'—'))}</td></tr>`; };
-    if (p.checkpoints && p.checkpoints.length) addRow('底模 (Checkpoint)', p.checkpoints.join(', '));
-    if (p.loras && p.loras.length) p.loras.forEach((l,i) => addRow(`LoRA #${i+1}`, (l.name||'?') + ' (强度:' + (l.strength||'?') + ')'));
-    addRow('采样器 (Sampler)', p.sampler);
-    addRow('调度器 (Scheduler)', p.scheduler);
-    addRow('步数 (Steps)', p.steps);
-    addRow('CFG Scale', p.cfg);
-    addRow('分辨率', p.resolution);
-    addRow('正向提示词节点', p.positive_prompt);
-    addRow('负向提示词节点', p.negative_prompt);
-    html += '</table></div>';
+    const style = data.style || {};
+    let html = '<div class="card" style="border:1px solid var(--accent2);"><h4>锁定组合参数（将用于所有后续生图）</h4><table style="width:100%;font-size:11px;border-collapse:collapse;">';
+    const addRow = (label, value) => { html += '<tr><td style="color:var(--text2);padding:2px 8px;">' + label + '</td><td style="padding:2px 8px;">' + esc(String(value||'未锁定')) + '</td></tr>'; };
+    addRow('底模 (Checkpoint)', style.locked_checkpoint);
+    if (style.locked_loras && style.locked_loras.length) {
+      style.locked_loras.forEach((l, i) => addRow('LoRA #' + (i+1), (l.name||'?') + ' (强度:' + (l.strength||'?') + ')'));
+    } else {
+      addRow('LoRA', '');
+    }
+    addRow('采样器 (Sampler)', style.locked_sampler);
+    addRow('调度器 (Scheduler)', style.locked_scheduler);
+    addRow('工作流', style.workflow_id);
+    html += '</table>';
+    if (style.is_locked) {
+      html += '<p style="font-size:10px;color:var(--accent2);margin-top:4px;">风格已锁定 — 角色/环境/分镜生成将统一使用以上参数</p>';
+    } else {
+      html += '<p style="font-size:10px;color:var(--warn);margin-top:4px;">尚未锁定 — 请选中预览图并点击"确认风格"</p>';
+    }
+    html += '</div>';
     const el = document.getElementById('workflowParams');
     if (el) el.innerHTML = html;
   } catch(e) {}

@@ -86,36 +86,37 @@ async def chat(request: Request):
 
 @app_web.post("/api/chat/stream")
 async def chat_stream(request: Request):
-    """Streaming chat — sends SSE events as agent processes."""
+    """Streaming chat — sends SSE events as agent works, showing real-time reply."""
     try:
         body = await request.json()
     except Exception:
         return StreamingResponse(
-            _sse_event({"error": "请求格式错误"}),
+            _sse_event({"type": "error", "text": "请求格式错误"}),
             media_type="text/event-stream",
         )
     user_input = body.get("message", "").strip()
+    session_id = body.get("session_id")
     if not user_input:
         return StreamingResponse(
-            _sse_event({"error": "empty message"}),
+            _sse_event({"type": "error", "text": "empty message"}),
             media_type="text/event-stream",
         )
 
     async def generate():
         agent = get_agent()
-        yield _sse_event({"type": "status", "text": "thinking..."})
-        try:
-            result = agent.process(user_input)
-        except Exception as exc:
-            yield _sse_event({"type": "error", "text": str(exc)})
-            return
-        yield _sse_event({
-            "type": "done",
-            "text": result.text or "",
-            "source": result.source,
-            "latency_ms": round(result.latency_ms, 1),
-            "tokens": result.tokens or {},
-        })
+        for event in agent.process_stream(user_input, session_id=session_id):
+            yield _sse_event(event)
+            # Trigger nudge after done if needed
+            if event.get("type") == "done" and event.get("nudge_triggered"):
+                try:
+                    nudge_result = await asyncio.to_thread(agent.process_nudge)
+                    if nudge_result.get("extracted", 0) > 0:
+                        yield _sse_event({
+                            "type": "nudge",
+                            "text": f"记忆审查完成: 提取了 {nudge_result['extracted']} 条新记忆",
+                        })
+                except Exception:
+                    pass
 
     return StreamingResponse(
         generate(),
@@ -313,7 +314,7 @@ async def comfyui_generate(request: Request):
     if wait and prompt_id:
         output = await adapter.wait_for_result(prompt_id)
         response["status"] = output["status"]
-        response["images"] = output.get("image_urls", [])
+        response["images"] = [_proxy_image_url(u) for u in output.get("image_urls", [])]
         response["error"] = output.get("error")
 
     return response
@@ -330,6 +331,9 @@ async def comfyui_status(prompt_id: str):
                 "queue_busy": queue.get("busy"),
                 "queue_pending": queue.get("pending_count", 0)}
     parsed = adapter._parse_prompt_result(result)
+    # Proxy image URLs
+    if parsed.get("image_urls"):
+        parsed["image_urls"] = [_proxy_image_url(u) for u in parsed["image_urls"]]
     return {"prompt_id": prompt_id, "found": True, **parsed}
 
 
@@ -354,6 +358,38 @@ async def comfyui_models():
     adapter = _get_comfyui()
     models = await adapter.list_models()
     return {"models": models}
+
+
+@app_web.get("/api/comfyui/proxy-image")
+async def comfyui_proxy_image(url: str = "", filename: str = ""):
+    """Proxy ComfyUI images through our server to avoid CORS issues.
+
+    Frontend calls this instead of directly referencing ComfyUI image URLs.
+    Usage: /api/comfyui/proxy-image?url=<full_comfyui_image_url>
+       or: /api/comfyui/proxy-image?filename=<image_filename>
+    """
+    from urllib.request import Request as URLRequest, urlopen
+    from urllib.error import URLError
+
+    adapter = _get_comfyui()
+    if not url:
+        if filename:
+            url = adapter.get_image_url(filename)
+        else:
+            return JSONResponse({"error": "url or filename required"}, status_code=400)
+
+    try:
+        req = URLRequest(url, headers={"Accept": "image/*"})
+        resp = await asyncio.to_thread(urlopen, req, timeout=30)
+        content = resp.read()
+        content_type = resp.headers.get("Content-Type", "image/png")
+        return StreamingResponse(
+            iter([content]),
+            media_type=content_type,
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+    except URLError as e:
+        return JSONResponse({"error": f"获取图片失败: {e}"}, status_code=502)
 
 
 # ── Story Engine ────────────────────────────────────────────────────
@@ -441,8 +477,12 @@ async def story_breakdown(request: Request):
 
 @app_web.get("/api/projects")
 async def list_projects():
-    """List all projects."""
-    return {"projects": _store.list_projects()}
+    """List all projects with folder paths."""
+    projects = _store.list_projects()
+    for p in projects:
+        p["folder"] = str(_store._proj_dir(p["id"]))
+    return {"projects": projects,
+            "data_dir": str(_store._dir)}
 
 
 @app_web.post("/api/projects")
@@ -552,6 +592,9 @@ async def regenerate_panel(project_id: str, panel_id: str, request: Request):
     adapter = _get_comfyui()
     params = await _build_gen_params(body, style, wf_id, adapter, prompt, neg)
 
+    # Apply locked combo params from style
+    _apply_locked_combo(params, style)
+
     # Inject character reference images as img2img input
     _inject_ref_images(params, panel, chars, envs)
 
@@ -596,7 +639,7 @@ async def panel_generation_status(project_id: str, panel_id: str):
     if status == "done":
         images = parsed.get("image_urls", [])
         if images:
-            panel["generated_images"] = images
+            panel["generated_images"] = [_proxy_image_url(u) for u in images]
         panel["status"] = "done"
         _store.save_panels(project_id, panels)
         _panels[project_id] = panels
@@ -643,6 +686,36 @@ def _assemble_single_prompt(panel: dict, chars: dict, envs: dict, style: dict) -
         parts.append(f"{camera} shot")
 
     return ", ".join(parts)
+
+
+def _apply_locked_combo(params: dict, style: dict):
+    """Apply locked combo params from style review to generation params.
+    Overrides workflow defaults with the user's selected model/LoRA/sampler combination.
+    """
+    locked_params = style.get("locked_combo_params", {})
+    if locked_params:
+        for k, v in locked_params.items():
+            if k not in params:
+                params[k] = v
+    # If style has locked_checkpoint but no specific param key, try to inject
+    checkpoint = style.get("locked_checkpoint", "")
+    if checkpoint:
+        for k in list(params.keys()):
+            if "ckpt" in k.lower() or "checkpoint" in k.lower() or "unet" in k.lower():
+                params[k] = checkpoint
+                break
+    sampler = style.get("locked_sampler", "")
+    if sampler:
+        for k in list(params.keys()):
+            if "sampler" in k.lower() and "scheduler" not in k.lower():
+                params[k] = sampler
+                break
+    scheduler = style.get("locked_scheduler", "")
+    if scheduler:
+        for k in list(params.keys()):
+            if "scheduler" in k.lower():
+                params[k] = scheduler
+                break
 
 
 def _inject_ref_images(params: dict, panel: dict, chars: dict, envs: dict):
@@ -865,9 +938,17 @@ async def save_style_config(project_id: str, request: Request):
         positive_prefix=body.get("positive_prefix", "masterpiece, best quality"),
         negative_prompt=body.get("negative_prompt", "低质量, 模糊, 畸形手, 畸形脸, 文字, 水印"),
         fixed_params=body.get("fixed_params", {}),
+        locked_checkpoint=body.get("locked_checkpoint", ""),
+        locked_loras=body.get("locked_loras", []),
+        locked_sampler=body.get("locked_sampler", ""),
+        locked_scheduler=body.get("locked_scheduler", ""),
+        locked_vae=body.get("locked_vae", ""),
+        locked_combo_params=body.get("locked_combo_params", {}),
         character_ref_workflow=body.get("character_ref_workflow", body.get("workflow_id", "")),
         environment_ref_workflow=body.get("environment_ref_workflow", body.get("workflow_id", "")),
         video_workflow=body.get("video_workflow", ""),
+        preview_images=body.get("preview_images", []),
+        preview_combo_map=body.get("preview_combo_map", []),
     )
     _store.save_style(project_id, cfg)
     return {"success": True, "style": _store.get_style(project_id)}
@@ -883,10 +964,47 @@ async def get_style_config(project_id: str):
 
 
 @app_web.post("/api/projects/{project_id}/style/lock")
-async def lock_style(project_id: str):
-    """Lock style — after lock, all panels use this config."""
-    cfg = _store.lock_style(project_id)
-    return {"success": True, "style": cfg, "message": "风格已锁定，所有分镜将使用此配置"}
+async def lock_style(project_id: str, request: Request):
+    """Lock style — capture selected combo and apply to all downstream generation.
+
+    Body (optional): {"selected_index": 0} — which preview image was selected.
+    The combo params from that preview are captured and locked.
+    """
+    selected_index = -1
+    try:
+        body = await request.json()
+        selected_index = body.get("selected_index", -1)
+    except Exception:
+        pass
+
+    cfg = _store.get_style(project_id) or {}
+    combo_map = cfg.get("preview_combo_map", [])
+
+    # Capture the selected combo's params
+    if 0 <= selected_index < len(combo_map):
+        selected_combo = combo_map[selected_index]
+        cfg["selected_preview"] = selected_index
+        cfg["locked_checkpoint"] = selected_combo.get("checkpoint", "")
+        cfg["locked_loras"] = selected_combo.get("loras", [])
+        cfg["locked_sampler"] = selected_combo.get("sampler", "")
+        cfg["locked_scheduler"] = selected_combo.get("scheduler", "")
+        cfg["locked_combo_params"] = selected_combo.get("params", {})
+        cfg["workflow_id"] = selected_combo.get("workflow_id", cfg.get("workflow_id", ""))
+        # Also set char/env workflows to the same unless explicitly different
+        if not cfg.get("character_ref_workflow"):
+            cfg["character_ref_workflow"] = cfg["workflow_id"]
+        if not cfg.get("environment_ref_workflow"):
+            cfg["environment_ref_workflow"] = cfg["workflow_id"]
+
+    cfg["is_locked"] = True
+    cfg["locked_at"] = time.time()
+    _store.save_style(project_id, _dict_to_style(cfg))
+
+    return {
+        "success": True,
+        "style": cfg,
+        "message": "风格已锁定，选中的模型/LoRA/采样器组合将用于后续所有生图",
+    }
 
 
 @app_web.post("/api/projects/{project_id}/style/unlock")
@@ -898,30 +1016,73 @@ async def unlock_style(project_id: str):
 
 @app_web.post("/api/projects/{project_id}/style/preview")
 async def generate_style_preview(project_id: str, request: Request):
-    """Generate N preview images for style review (审图). Returns prompt_ids to poll."""
+    """Generate N preview images for style review (审图).
+
+    Auto-enumerates different workflow combos (checkpoint×LoRA×sampler variations)
+    instead of calling the same workflow N times. Each preview uses a different
+    combination so the user can compare quality across combos.
+    Only generates still images, never video.
+    """
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
     count = body.get("count", 10)
-    seeds = body.get("seeds", [-1] * count)
     style = _store.get_style(project_id) or {}
-    wf_id = style.get("workflow_id", "")
-
-    if not wf_id:
-        return JSONResponse({"error": "请先选择生图工作流"}, status_code=400)
 
     adapter = _get_comfyui()
+
+    # Get all available workflows and filter to image-generation ones
+    all_wfs = await adapter.list_workflows()
+    img_wfs = [w for w in all_wfs if _is_image_workflow(w)]
+
+    if not img_wfs:
+        return JSONResponse({"error": "没有找到可用的生图工作流"}, status_code=400)
+
+    # Pick diverse workflows (different combos) up to count
+    import random
+    if len(img_wfs) > count:
+        # Pick a diverse subset: try to cover different workflow categories
+        selected_wfs = img_wfs[:count]
+    else:
+        # Cycle through available workflows
+        selected_wfs = (img_wfs * ((count // len(img_wfs)) + 1))[:count]
+
     prompt_ids = []
+    combo_map = []  # Track which combo produced each preview
+
+    # Use project content for preview, not a generic cat
+    # Gather character/environment descriptions for a relevant preview
+    chars = _store.get_characters(project_id)
+    envs = _store.get_environments(project_id)
+    char_desc = chars[0].get("appearance_detail", "") if chars else ""
+    env_desc = envs[0].get("description", "") if envs else ""
+
+    preview_base = f"{style.get('style_name', '')}, {style.get('positive_prefix', 'masterpiece, high quality')}"
+    if char_desc:
+        preview_base += f", {char_desc[:200]}"
+    if env_desc:
+        preview_base += f", {env_desc[:200]}"
+    if not char_desc and not env_desc:
+        preview_base += ", high quality illustration, detailed"
 
     for i in range(count):
-        seed = seeds[i] if i < len(seeds) else -1
-        prompt = (
-            f"{style.get('positive_prefix', 'masterpiece, high quality')}, "
-            f"a kitten sitting next to a flower pot, "
-            f"soft lighting, high quality illustration"
-        )
+        wf = selected_wfs[i]
+        wf_id = wf.get("id", "")
+        wf_name = wf.get("name", wf_id)
+        seed = random.randint(1, 2**31 - 1)
+
+        # Try to get workflow config to extract combo info
+        combo_info = {"workflow_id": wf_id, "workflow_name": wf_name, "seed": seed}
+        try:
+            config = await adapter.get_workflow_config(wf_id)
+            nodes = config.get("workflow_template", config).get("nodes", [])
+            combo_info.update(_extract_combo_info(nodes))
+        except Exception:
+            pass
+
+        prompt = f"{preview_base}, seed_{seed}"
         params = await _build_gen_params(
             {"steps": 20, "cfg": 7, "seed": seed},
             style, wf_id, adapter, prompt
@@ -929,8 +1090,18 @@ async def generate_style_preview(project_id: str, request: Request):
         result = await adapter.generate(wf_id, params)
         if result.get("prompt_id"):
             prompt_ids.append(result["prompt_id"])
+            combo_map.append(combo_info)
 
-    return {"success": True, "prompt_ids": prompt_ids, "count": len(prompt_ids)}
+    # Save combo map to style
+    style["preview_combo_map"] = combo_map
+    _store.save_style(project_id, _dict_to_style(style))
+
+    return {
+        "success": True,
+        "prompt_ids": prompt_ids,
+        "count": len(prompt_ids),
+        "combo_map": combo_map,
+    }
 
 
 @app_web.post("/api/projects/{project_id}/style/preview-image")
@@ -945,8 +1116,9 @@ async def save_preview_image(project_id: str, request: Request):
     if image_url:
         style = _store.get_style(project_id) or {}
         previews = style.get("preview_images", [])
-        if image_url not in previews:
-            previews.append(image_url)
+        proxied = _proxy_image_url(image_url) if not image_url.startswith("/api/") else image_url
+        if proxied not in previews:
+            previews.append(proxied)
             style["preview_images"] = previews
             _store.save_style(project_id, _dict_to_style(style))
 
@@ -955,12 +1127,60 @@ async def save_preview_image(project_id: str, request: Request):
 
 @app_web.post("/api/projects/{project_id}/style/clear-previews")
 async def clear_preview_images(project_id: str):
-    """Clear all preview images for this project."""
+    """Clear all preview images and combo map for this project."""
     style = _store.get_style(project_id) or {}
     style["preview_images"] = []
+    style["preview_combo_map"] = []
     style["selected_preview"] = -1
     _store.save_style(project_id, _dict_to_style(style))
     return {"success": True, "message": "预览图已清理"}
+
+
+def _proxy_image_url(url: str) -> str:
+    """Wrap a ComfyUI image URL through our proxy to avoid CORS."""
+    if not url:
+        return url
+    from urllib.parse import quote
+    return f"/api/comfyui/proxy-image?url={quote(url, safe='')}"
+
+
+def _is_image_workflow(wf: dict) -> bool:
+    """Check if a workflow is for still-image generation (not video)."""
+    name = wf.get("name", "").lower()
+    # Exclude video workflows
+    video_keywords = ["视频", "video", "vid2", "animate", "wan", "ltx"]
+    for kw in video_keywords:
+        if kw in name:
+            return False
+    return True
+
+
+def _extract_combo_info(nodes: list) -> dict:
+    """Extract checkpoint/LoRA/sampler info from workflow nodes."""
+    info = {"checkpoint": "", "loras": [], "sampler": "", "scheduler": ""}
+    for node in nodes:
+        ntype = node.get("type", "")
+        inputs = node.get("inputs", [])
+        if "CheckpointLoader" in ntype or "UNETLoader" in ntype:
+            for inp in inputs:
+                if "ckpt" in inp.get("name", "").lower() or "unet" in inp.get("name", "").lower():
+                    info["checkpoint"] = inp.get("default", "")
+        if "LoraLoader" in ntype:
+            lora = {}
+            for inp in inputs:
+                if "lora" in inp.get("name", "").lower():
+                    lora["name"] = inp.get("default", "")
+                if "strength" in inp.get("name", "").lower():
+                    lora["strength"] = inp.get("default", 1.0)
+            if lora:
+                info["loras"].append(lora)
+        if "KSampler" in ntype:
+            for inp in inputs:
+                if inp.get("name") == "sampler_name":
+                    info["sampler"] = inp.get("default", "")
+                if inp.get("name") == "scheduler":
+                    info["scheduler"] = inp.get("default", "")
+    return info
 
 
 @app_web.get("/api/projects/{project_id}/style/workflow-params")
@@ -1065,10 +1285,17 @@ def _dict_to_style(d: dict) -> "StyleConfig":
         positive_prefix=d.get("positive_prefix", ""),
         negative_prompt=d.get("negative_prompt", ""),
         fixed_params=d.get("fixed_params", {}),
+        locked_checkpoint=d.get("locked_checkpoint", ""),
+        locked_loras=d.get("locked_loras", []),
+        locked_sampler=d.get("locked_sampler", ""),
+        locked_scheduler=d.get("locked_scheduler", ""),
+        locked_vae=d.get("locked_vae", ""),
+        locked_combo_params=d.get("locked_combo_params", {}),
         character_ref_workflow=d.get("character_ref_workflow", ""),
         environment_ref_workflow=d.get("environment_ref_workflow", ""),
         video_workflow=d.get("video_workflow", ""),
         preview_images=d.get("preview_images", []),
+        preview_combo_map=d.get("preview_combo_map", []),
         selected_preview=d.get("selected_preview", -1),
         is_locked=d.get("is_locked", False),
         locked_at=d.get("locked_at", 0),
@@ -1133,17 +1360,26 @@ async def generate_environment_ref(project_id: str, request: Request):
     adapter = _get_comfyui()
     params = await _build_gen_params(body, style, wf_id, adapter, prompt)
 
+    # Apply locked combo params from style
+    _apply_locked_combo(params, style)
+
     result = await adapter.generate(wf_id, params)
     prompt_id = result.get("prompt_id")
 
     if prompt_id:
         env["ref_prompt"] = prompt
         env["ref_prompt_id"] = prompt_id
+        env["gen_params"] = {"steps": body.get("steps", 20), "cfg": body.get("cfg", 7),
+                            "seed": body.get("seed", -1), "workflow_id": wf_id}
         env["status"] = "generating"
         _store.save_environments(project_id, envs)
         _environments[project_id] = envs
 
-    return {"success": True, "prompt_id": prompt_id, "environment_id": env_id, "prompt": prompt}
+    return {"success": True, "prompt_id": prompt_id, "environment_id": env_id, "prompt": prompt,
+            "combo_used": {"checkpoint": style.get("locked_checkpoint", ""),
+                          "loras": style.get("locked_loras", []),
+                          "sampler": style.get("locked_sampler", ""),
+                          "scheduler": style.get("locked_scheduler", "")}}
 
 
 @app_web.get("/api/projects/{project_id}/environments/{env_id}/ref-status")
@@ -1170,7 +1406,7 @@ async def environment_ref_status(project_id: str, env_id: str):
     if status == "done":
         images = parsed.get("image_urls", [])
         if images:
-            env["ref_image_url"] = images[0]
+            env["ref_image_url"] = _proxy_image_url(images[0])
         env["status"] = "done"
         _store.save_environments(project_id, envs)
         _environments[project_id] = envs
@@ -1219,17 +1455,26 @@ async def generate_character_ref(project_id: str, request: Request):
     adapter = _get_comfyui()
     params = await _build_gen_params(body, style, wf_id, adapter, prompt, neg)
 
+    # Apply locked combo params from style (overrides defaults with selected model/LoRA/sampler)
+    _apply_locked_combo(params, style)
+
     result = await adapter.generate(wf_id, params)
     prompt_id = result.get("prompt_id")
 
     if prompt_id:
         char["ref_prompt"] = prompt
         char["ref_prompt_id"] = prompt_id
+        char["gen_params"] = {"steps": body.get("steps", 20), "cfg": body.get("cfg", 7),
+                             "seed": body.get("seed", -1), "workflow_id": wf_id}
         char["status"] = "generating"
         _store.save_characters(project_id, chars)
         _characters[project_id] = chars
 
-    return {"success": True, "prompt_id": prompt_id, "character_id": char_id, "prompt": prompt}
+    return {"success": True, "prompt_id": prompt_id, "character_id": char_id, "prompt": prompt,
+            "combo_used": {"checkpoint": style.get("locked_checkpoint", ""),
+                          "loras": style.get("locked_loras", []),
+                          "sampler": style.get("locked_sampler", ""),
+                          "scheduler": style.get("locked_scheduler", "")}}
 
 
 @app_web.get("/api/projects/{project_id}/characters/{char_id}/ref-status")
@@ -1256,11 +1501,11 @@ async def character_ref_status(project_id: str, char_id: str):
     if status == "done":
         images = parsed.get("image_urls", [])
         if images:
-            char["ref_image_full"] = images[0]
+            char["ref_image_full"] = _proxy_image_url(images[0])
             if len(images) > 1:
-                char["ref_image_front"] = images[0]
-                char["ref_image_side"] = images[1] if len(images) > 1 else images[0]
-                char["ref_image_back"] = images[2] if len(images) > 2 else images[0]
+                char["ref_image_front"] = _proxy_image_url(images[0])
+                char["ref_image_side"] = _proxy_image_url(images[1] if len(images) > 1 else images[0])
+                char["ref_image_back"] = _proxy_image_url(images[2] if len(images) > 2 else images[0])
         char["status"] = "done"
         _store.save_characters(project_id, chars)
         _characters[project_id] = chars
@@ -1467,6 +1712,37 @@ async def delete_memory(memory_id: str):
         return JSONResponse({"error": "memory not found"}, status_code=404)
     mem.delete(memory_id)
     return {"success": True, "message": f"记忆 '{memory_id}' 已删除"}
+
+
+@app_web.post("/api/memory/nudge")
+async def trigger_memory_nudge():
+    """Manually trigger background memory review (Nudge).
+
+    Distills buffered conversation into structured memories using the LLM,
+    then clears the buffer. Use this for manual memory management or when
+    you notice the agent forgetting important context.
+    """
+    agent = get_agent()
+    try:
+        result = await asyncio.to_thread(agent.process_nudge)
+    except Exception as exc:
+        return JSONResponse({"error": f"记忆审查失败: {exc}"}, status_code=500)
+    return {"success": True, **result}
+
+
+@app_web.get("/api/projects/{project_id}/folder")
+async def get_project_folder(project_id: str):
+    """Get project folder path on disk."""
+    proj = _store.get_project(project_id)
+    if not proj:
+        return JSONResponse({"error": "项目不存在"}, status_code=404)
+    return {
+        "project_id": project_id,
+        "folder": str(_store._proj_dir(project_id)),
+        "data_dir": str(_store._dir),
+        "files": [f.name for f in _store._proj_dir(project_id).iterdir()]
+        if _store._proj_dir(project_id).exists() else [],
+    }
 
 
 # ── Batch Generation ────────────────────────────────────────────────

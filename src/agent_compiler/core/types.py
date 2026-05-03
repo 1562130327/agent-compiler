@@ -57,6 +57,7 @@ class AgentResult:
     error: str | None = None
     text: str = ""  # conversational response for display
     tokens: dict[str, int] = field(default_factory=dict)  # {prompt, completion, total}
+    nudge_triggered: bool = False  # True when background memory review should fire
 
 
 @dataclass

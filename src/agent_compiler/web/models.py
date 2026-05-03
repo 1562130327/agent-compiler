@@ -12,17 +12,31 @@ from typing import Any
 
 @dataclass
 class StyleConfig:
-    """项目全局风格配置 — 审图阶段锁定后所有分镜共用."""
+    """项目全局风格配置 — 审图阶段锁定后所有分镜共用.
+
+    审图时系统自动枚举不同组合生成预览图，用户选择最佳组合后锁定。
+    锁定的组合参数（checkpoint/LoRA/sampler等）会贯穿后续所有生图流程。
+    """
     project_id: str
     style_name: str = "日漫风格"
-    workflow_id: str = ""                         # 生图用的 ComfyUI 工作流
+    workflow_id: str = ""                         # 生图用的 ComfyUI 工作流 (系统自动选)
     positive_prefix: str = "masterpiece, best quality"
     negative_prompt: str = "低质量, 模糊, 畸形手, 畸形脸, 文字, 水印"
     fixed_params: dict[str, Any] = field(default_factory=dict)  # 锁定参数如 seed, cfg, size
+
+    # Locked combo from review (审图确定的组合，贯穿后续生图)
+    locked_checkpoint: str = ""                   # 选定的底模
+    locked_loras: list[dict] = field(default_factory=list)     # [{name, strength}]
+    locked_sampler: str = ""                      # 选定的采样器
+    locked_scheduler: str = ""                    # 选定的调度器
+    locked_vae: str = ""                          # 选定的VAE
+    locked_combo_params: dict[str, Any] = field(default_factory=dict)  # 锁定时的全部节点参数快照
+
     character_ref_workflow: str = ""              # 角色参考图工作流
     environment_ref_workflow: str = ""            # 环境参考图工作流
     video_workflow: str = ""                      # 图生视频工作流(如 H18-图生视频)
     preview_images: list[str] = field(default_factory=list)  # 审图预览图列表
+    preview_combo_map: list[dict] = field(default_factory=list)  # [{index, checkpoint, loras, sampler, params}]
     selected_preview: int = -1                    # 选中的预览图索引
     is_locked: bool = False
     locked_at: float = 0.0
@@ -155,10 +169,17 @@ class ProjectStore:
             "project_id": project_id, "style_name": config.style_name,
             "workflow_id": config.workflow_id, "positive_prefix": config.positive_prefix,
             "negative_prompt": config.negative_prompt, "fixed_params": config.fixed_params,
+            "locked_checkpoint": config.locked_checkpoint,
+            "locked_loras": config.locked_loras,
+            "locked_sampler": config.locked_sampler,
+            "locked_scheduler": config.locked_scheduler,
+            "locked_vae": config.locked_vae,
+            "locked_combo_params": config.locked_combo_params,
             "character_ref_workflow": config.character_ref_workflow,
             "environment_ref_workflow": config.environment_ref_workflow,
             "video_workflow": config.video_workflow,
             "preview_images": config.preview_images,
+            "preview_combo_map": config.preview_combo_map,
             "selected_preview": config.selected_preview,
             "is_locked": config.is_locked, "locked_at": config.locked_at,
         })

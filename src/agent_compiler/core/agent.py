@@ -1,12 +1,13 @@
-"""Main agent: if-else dispatch (Cache -> LLM ReAct) + self-evolving memory.
+"""Main agent: if-else dispatch (Cache -> LLM ReAct) + Nudge-driven memory.
 
 Architecture:
     Cache check → hit:  execute cached workflow, pure CPU, milliseconds
                  → miss: LLM ReAct loop → compile → cache → execute
 
-    Every interaction feeds the self-evolving memory, which injects
-    relevant context into future LLM calls. The system gets faster
-    AND smarter over time.
+    Memory uses Nudge engine: conversations are buffered, not instantly written.
+    Every ~N interactions, a background review agent distills the buffer into
+    structured memories. The frozen memory context is injected into LLM calls
+    for stable, cache-friendly performance.
 """
 
 from __future__ import annotations
@@ -239,20 +240,14 @@ class Agent:
 
         latency_ms = (time.perf_counter() - t0) * 1000
 
-        # Auto-extract memories from this interaction (using LLM for quality)
+        # Buffer conversation for Nudge-driven review (NOT instant write)
         reply_text = react_result.get("text", "")
         try:
-            self.memory.extract_from_interaction(user_input, reply_text, self.llm)
-        except Exception:
-            pass  # memory extraction is best-effort
-
-        # Save episodic memory (conversation summary)
-        try:
-            self.memory.add_episodic(user_input, reply_text)
+            self.memory.buffer_interaction(user_input, reply_text)
         except Exception:
             pass
 
-        # Save reflexion feedback as procedural memory
+        # Save reflexion feedback as procedural memory (still valuable, low cost)
         reflexion_log = react_result.get("reflexion_log", [])
         for entry in reflexion_log:
             if entry.get("score", 0) < 4 and entry.get("feedback"):
@@ -265,12 +260,19 @@ class Agent:
                 except Exception:
                     pass
 
-        # Periodic memory consolidation (every 10 LLM interactions)
+        # Nudge trigger: every N interactions, spawn background review
+        nudge_fired = self.memory.tick_interaction()
+        if nudge_fired:
+            react_result["text"] += "\n\n[记忆审查已触发]"
+            # The caller (web server) can check this flag to spawn a background agent
+            react_result["nudge_triggered"] = True
+
+        # Periodic lightweight consolidation (fast local pass, no LLM needed)
         if self._interaction_count % 10 == 0:
             try:
                 changes = self.memory.consolidate()
                 if changes > 0:
-                    react_result["text"] += f"\n\n[记忆演化: {changes} 条记录已更新]"
+                    react_result["text"] += f"\n\n[记忆整理: {changes} 条记录已更新]"
             except Exception:
                 pass
 
@@ -286,10 +288,107 @@ class Agent:
             workflow_id=react_result.get("workflow_id"),
             text=react_result["text"],
             tokens=llm_tokens,
+            nudge_triggered=react_result.get("nudge_triggered", False),
         )
 
         session.add_message("assistant", react_result["text"])
         return agent_result
+
+    def process_stream(self, user_input: str, session_id: str | None = None):
+        """Generator-based streaming process: yields events as agent works.
+
+        Yields dicts: {type: "thinking"|"reply_chunk"|"done"|"error", text: str}
+        """
+        yield {"type": "thinking", "text": "分析中..."}
+        t0 = time.perf_counter()
+
+        try:
+            result = self.process(user_input, session_id=session_id)
+        except Exception as exc:
+            yield {"type": "error", "text": str(exc)}
+            return
+
+        # Stream the reply text in chunks for real-time display
+        reply = result.text or ""
+        chunk_size = 20
+        for i in range(0, len(reply), chunk_size):
+            yield {
+                "type": "reply_chunk",
+                "text": reply[i:i + chunk_size],
+                "offset": i,
+                "total": len(reply),
+            }
+
+        yield {
+            "type": "done",
+            "text": reply,
+            "source": result.source,
+            "latency_ms": round(result.latency_ms, 1),
+            "tokens": result.tokens or {},
+            "nudge_triggered": result.nudge_triggered,
+        }
+
+    def process_nudge(self) -> dict:
+        """Trigger background memory review. Called by web server when nudge fires.
+
+        Uses the LLM to distill buffered conversation into structured memories,
+        then clears the buffer. Returns stats about what was extracted.
+        """
+        snapshot = self.memory.get_review_snapshot()
+        if not snapshot:
+            return {"extracted": 0, "message": "no conversation to review"}
+
+        # Format conversation for LLM extraction
+        conv_text = "\n".join(
+            f"[{m['role']}] {m['content'][:300]}" for m in snapshot[-20:]
+        )
+
+        extraction_prompt = f"""审查以下对话片段，提取值得长期记忆的事实。只提取以下类型：
+
+1. **用户画像** (user_profile): 姓名、角色、偏好、目标
+2. **项目信息** (project): 项目名、技术栈、约束条件、关键决策
+3. **操作规则** (pattern): 从成功或失败中学到的经验
+4. **反馈** (feedback): 用户给出的明确指导
+
+如果没有值得保存的内容，回复 "NOTHING_TO_SAVE"。
+
+对话：
+{conv_text}
+
+输出 JSON 数组（如果没有值得保存的内容则输出空数组）:
+[
+  {{
+    "category": "user_profile|project|pattern|feedback",
+    "tier": "semantic|procedural",
+    "title": "简短标题",
+    "content": "提炼的事实（不超过200字）",
+    "keywords": ["关键词1", "关键词2"],
+    "confidence": 0.8
+  }}
+]"""
+
+        try:
+            result = self.llm.chat(
+                extraction_prompt,
+                system="你是一个记忆提炼系统。只输出 JSON，不要 markdown，不要解释。"
+            )
+            text = result if isinstance(result, str) else str(result)
+
+            # Extract JSON
+            json_start = text.find("[")
+            json_end = text.rfind("]") + 1
+            if json_start >= 0 and json_end > json_start and "NOTHING_TO_SAVE" not in text:
+                facts = json.loads(text[json_start:json_end])
+                if isinstance(facts, list) and facts:
+                    entries = self.memory.extract_facts(facts)
+                    self.memory.clear_buffer()
+                    self.memory.refresh_frozen()
+                    return {"extracted": len(entries), "facts": facts}
+        except Exception:
+            pass  # Extraction is best-effort
+
+        self.memory.clear_buffer()
+        return {"extracted": 0, "message": "no facts worth saving"}
 
     # ── ReAct loop ─────────────────────────────────────────────────
 
